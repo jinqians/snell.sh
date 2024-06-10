@@ -16,7 +16,7 @@ This script allows you to easily manage the installation, uninstallation, and co
 ## Installation
 1. Download the script:
 ```shell
-wget https://github.com/yourusername/snell-management-script/raw/main/snell.sh -O snell.sh
+wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh
 chmod +x snell.sh
 ```
 2. Run the script:
