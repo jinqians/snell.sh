@@ -153,6 +153,22 @@ uninstall_snell() {
     echo -e "${GREEN}Snell 卸载成功${RESET}"
 }
 
+# 查看 Snell 配置
+view_snell_config() {
+    if [ -f /etc/snell/snell-server.conf ]; then
+        CONF_CONTENT=$(cat /etc/snell/snell-server.conf)
+        HOST_IP=$(curl -s http://checkip.amazonaws.com)
+        IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
+        PORT=$(grep 'listen' /etc/snell/snell-server.conf | cut -d: -f3)
+        PSK=$(grep 'psk' /etc/snell/snell-server.conf | cut -d' ' -f3)
+        echo -e "${GREEN}当前 Snell 配置:${RESET}"
+        echo "${CONF_CONTENT}"
+        echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+    else
+        echo -e "${RED}Snell 配置文件不存在。${RESET}"
+    fi
+}
+
 # 显示菜单
 show_menu() {
     clear
@@ -164,6 +180,7 @@ show_menu() {
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo "${GREEN}已安装${RESET}"; else echo "${RED}未安装${RESET}"; fi)${RESET}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
+    echo "3. 查看 Snell 配置"
     echo "0. 退出"
     echo -e "${GREEN}======================${RESET}"
     read -p "请输入选项编号: " choice
@@ -171,23 +188,26 @@ show_menu() {
 }
 
 # 主循环
-check_root
 while true; do
     show_menu
-    case "${choice}" in
+    case $choice in
         1)
+            check_root
             install_snell
             ;;
         2)
+            check_root
             uninstall_snell
             ;;
+        3)
+            view_snell_config
+            ;;
         0)
-            echo -e "${GREEN}已退出 Snell${RESET}"
             exit 0
             ;;
         *)
-            echo -e "${RED}无效的选项${RESET}"
+            echo -e "${RED}无效选项，请重新输入.${RESET}"
             ;;
     esac
-    read -p "按 enter 键继续..."
+    read -p "按任意键返回菜单..."
 done
