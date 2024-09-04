@@ -14,15 +14,11 @@ This script allows you to easily manage the installation, uninstallation, and co
 + Root or sudo access
 
 ## Installation
-1. Download the script:
+1. Download and Run the script:
 ```shell
-wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh
-chmod +x snell.sh
+wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
 ```
-2. Run the script:
-```shell
-sudo ./snell.sh
-```
+
 
 ## Usage
 When you run the script, you will see the following menu:
