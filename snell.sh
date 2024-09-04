@@ -23,12 +23,28 @@ check_root() {
     fi
 }
 
-# 检查 Snell 是否已安装
-check_snell_installed() {
+# 获取当前安装的 Snell 版本
+get_current_snell_version() {
     if command -v snell-server &> /dev/null; then
-        return 0
+        CURRENT_VERSION=$(snell-server --version | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+')
     else
-        return 1
+        CURRENT_VERSION="未安装"
+    fi
+}
+
+# 获取最新 Snell 版本
+get_latest_snell_version() {
+    LATEST_VERSION=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    LATEST_VERSION="v$LATEST_VERSION"
+}
+
+# 获取 Snell 的下载链接
+get_snell_url() {
+    ARCH=$(uname -m)
+    if [[ ${ARCH} == "aarch64" ]]; then
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${LATEST_VERSION}-linux-aarch64.zip"
+    else
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${LATEST_VERSION}-linux-amd64.zip"
     fi
 }
 
@@ -39,19 +55,8 @@ install_snell() {
     wait_for_apt
     apt update && apt install -y wget unzip
 
-    SNELL_VERSION="v4.0.1"
-    ARCH=$(uname -m)
-    SNELL_URL=""
-    INSTALL_DIR="/usr/local/bin"
-    SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
-    CONF_DIR="/etc/snell"
-    CONF_FILE="${CONF_DIR}/snell-server.conf"
-
-    if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-    else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-    fi
+    get_latest_snell_version
+    get_snell_url
 
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
@@ -59,18 +64,20 @@ install_snell() {
         exit 1
     fi
 
-    unzip -o snell-server.zip -d ${INSTALL_DIR}
+    unzip -o snell-server.zip -d /usr/local/bin/
     if [ $? -ne 0 ]; then
         echo -e "${RED}解压缩 Snell 失败。${RESET}"
         exit 1
     fi
 
     rm snell-server.zip
-    chmod +x ${INSTALL_DIR}/snell-server
+    chmod +x /usr/local/bin/snell-server
 
     RANDOM_PORT=$(shuf -i 30000-65000 -n 1)
     RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
+    CONF_DIR="/etc/snell"
+    CONF_FILE="${CONF_DIR}/snell-server.conf"
     mkdir -p ${CONF_DIR}
 
     cat > ${CONF_FILE} << EOF
@@ -80,7 +87,7 @@ psk = ${RANDOM_PSK}
 ipv6 = true
 EOF
 
-    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+    cat > /lib/systemd/system/snell.service << EOF
 [Unit]
 Description=Snell Proxy Service
 After=network.target
@@ -90,7 +97,7 @@ Type=simple
 User=nobody
 Group=nogroup
 LimitNOFILE=32768
-ExecStart=${INSTALL_DIR}/snell-server -c ${CONF_FILE}
+ExecStart=/usr/local/bin/snell-server -c ${CONF_FILE}
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 StandardOutput=syslog
 StandardError=syslog
@@ -101,28 +108,49 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}重载 Systemd 配置失败。${RESET}"
-        exit 1
-    fi
-
     systemctl enable snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}开机自启动 Snell 失败。${RESET}"
-        exit 1
-    fi
-
     systemctl start snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}启动 Snell 服务失败。${RESET}"
-        exit 1
-    fi
 
     HOST_IP=$(curl -s http://checkip.amazonaws.com)
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = 4, reuse = true, tfo = true"
+    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${LATEST_VERSION}, reuse = true, tfo = true"
+}
+
+# 升级 Snell
+upgrade_snell() {
+    get_current_snell_version
+    get_latest_snell_version
+
+    if [ "$CURRENT_VERSION" == "$LATEST_VERSION" ]; then
+        echo -e "${GREEN}Snell 已是最新版本 ($CURRENT_VERSION)，无需升级。${RESET}"
+    else
+        echo -e "${CYAN}当前版本: $CURRENT_VERSION${RESET}"
+        echo -e "${CYAN}最新版本: $LATEST_VERSION${RESET}"
+        echo -e "${CYAN}正在升级 Snell...${RESET}"
+
+        systemctl stop snell
+        get_snell_url
+
+        wget ${SNELL_URL} -O snell-server.zip
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}下载 Snell 失败。${RESET}"
+            exit 1
+        fi
+
+        unzip -o snell-server.zip -d /usr/local/bin/
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}解压缩 Snell 失败。${RESET}"
+            exit 1
+        fi
+
+        rm snell-server.zip
+        chmod +x /usr/local/bin/snell-server
+
+        systemctl start snell
+        echo -e "${GREEN}Snell 升级成功至版本 $LATEST_VERSION${RESET}"
+    fi
 }
 
 # 卸载 Snell
@@ -130,23 +158,8 @@ uninstall_snell() {
     echo -e "${CYAN}正在卸载 Snell${RESET}"
 
     systemctl stop snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}停止 Snell 服务失败。${RESET}"
-        exit 1
-    fi
-
     systemctl disable snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}禁用开机自启动失败。${RESET}"
-        exit 1
-    fi
-
     rm /lib/systemd/system/snell.service
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}删除 Systemd 服务文件失败。${RESET}"
-        exit 1
-    fi
-
     rm /usr/local/bin/snell-server
     rm -rf /etc/snell
 
@@ -172,6 +185,7 @@ view_snell_config() {
 # 显示菜单
 show_menu() {
     clear
+    get_current_snell_version
     check_snell_installed
     snell_status=$?
     echo -e "${GREEN}=================author: jinqian==================${RESET}"
@@ -179,8 +193,9 @@ show_menu() {
     echo -e "${GREEN}=== Snell 管理工具 ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo "${GREEN}已安装${RESET}"; else echo "${RED}未安装${RESET}"; fi)${RESET}"
     echo "1. 安装 Snell"
-    echo "2. 卸载 Snell"
-    echo "3. 查看 Snell 配置"
+    echo "2. 升级 Snell"
+    echo "3. 卸载 Snell"
+    echo "4. 查看 Snell 配置"
     echo "0. 退出"
     echo -e "${GREEN}======================${RESET}"
     read -p "请输入选项编号: " choice
@@ -197,9 +212,13 @@ while true; do
             ;;
         2)
             check_root
-            uninstall_snell
+            upgrade_snell
             ;;
         3)
+            check_root
+            uninstall_snell
+            ;;
+        4)
             view_snell_config
             ;;
         0)
