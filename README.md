@@ -28,8 +28,9 @@ When you run the script, you will see the following menu:
 === Snell 管理工具 ===
 当前状态: 已安装/未安装
 1. 安装 Snell
-2. 卸载 Snell
-3. 查看 Snell 配置
+2. 升级 Snell
+3. 卸载 Snell
+4. 查看 Snell 配置
 0. 退出
 ======================
 ```
@@ -39,13 +40,15 @@ When you run the script, you will see the following menu:
   + Installs the Snell proxy server.
   + Generates a random port and password for Snell configuration.
   + Starts the Snell service and enables it to run at startup.
-2. 卸载 Snell
+2. 升级 Snell
+  + Check the difference between the current version and the latest version and upgrade if necessary.
+3. 卸载 Snell
   + Stops the Snell service.
   + Disables Snell from running at startup.
   + Removes all Snell-related files and configurations.
-3. 查看 Snell 配置:
+4. 查看 Snell 配置:
   + Displays the current Snell configuration, including the IP address, port, and password.
-4. 退出
+5. 退出
   + Exits the script.
 
 ## Example Output
