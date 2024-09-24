@@ -1,12 +1,14 @@
 # Snell Management Script
 
 ## Introduction
-This script allows you to easily manage the installation, uninstallation, and configuration of the Snell proxy server. It provides a menu-based interface to perform these operations.
+This Snell management script provides an efficient and automated solution for managing the Snell proxy service on Linux-based systems. Whether you are setting up a new Snell proxy or managing an existing instance, the script streamlines the process with simple commands for installation, configuration, version control, and uninstallation. It is designed to save time and reduce complexity for users who require a high-performance encrypted proxy service.
+
 
 ## Features
-+ Install Snell Proxy Server
-+ Uninstall Snell Proxy Server
-+ View Snell Configuration
++ Easy Installation
++ Seamless Removal
++ Configuration Review
++ Version Check and Upgrad
 + Supports both AMD64 and ARM64 architectures
 
 ## Prerequisites
@@ -42,14 +44,14 @@ When you run the script, you will see the following menu:
   + Installs the Snell proxy server.
   + Generates a random port and password for Snell configuration.
   + Starts the Snell service and enables it to run at startup.
-2. 升级 Snell
-  + Check the difference between the current version and the latest version and upgrade if necessary.
-3. 卸载 Snell
+2. 卸载 Snell
   + Stops the Snell service.
   + Disables Snell from running at startup.
   + Removes all Snell-related files and configurations.
-4. 查看 Snell 配置:
+3. 查看 Snell 配置:
   + Displays the current Snell configuration, including the IP address, port, and password.
+4. 检查 Snell 更新:
+  + Automatically checks for the latest Snell version and offers easy upgrading options, keeping the proxy service up-to-date with minimal effort.
 5. 退出
   + Exits the script.
 
