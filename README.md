@@ -23,16 +23,18 @@ wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.
 ## Usage
 When you run the script, you will see the following menu:
 ```shell
-=================author: jinqian==================
-=================website: https://jinqians.com==================
-=== Snell 管理工具 ===
-当前状态: 已安装/未安装
-1. 安装 Snell
-2. 升级 Snell
-3. 卸载 Snell
-4. 查看 Snell 配置
-0. 退出
-======================
+ ========================================= 
+ 作者: jinqian 
+ 网站：https://jinqians.com 
+ 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理 
+ ========================================= 
+ ============== Snell 管理工具 ============== 
+1) 安装 Snell
+2) 卸载 Snell
+3) 查看 Snell 配置
+4) 检查 Snell 更新
+0) 退出
+请选择操作:
 ```
 
 ## Options
