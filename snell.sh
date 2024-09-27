@@ -196,7 +196,6 @@ uninstall_snell() {
     echo -e "${GREEN}Snell 卸载成功${RESET}"
 }
 
-# 查看 Snell 配置
 view_snell_config() {
     if [ -f "${SNELL_CONF_FILE}" ]; then
         echo -e "${GREEN}当前 Snell 配置:${RESET}"
@@ -205,7 +204,11 @@ view_snell_config() {
         # 解析配置文件中的信息
         HOST_IP=$(curl -s http://checkip.amazonaws.com)
         IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
-        PORT=$(grep -E '^listen' "${SNELL_CONF_FILE}" | cut -d: -f2)
+        
+        # 提取端口号 - 提取 "::0:" 后面的部分
+        PORT=$(grep -E '^listen' "${SNELL_CONF_FILE}" | sed -n 's/.*::0:\([0-9]*\)/\1/p')
+        
+        # 提取 PSK
         PSK=$(grep -E '^psk' "${SNELL_CONF_FILE}" | awk -F'=' '{print $2}' | tr -d ' ')
         
         echo -e "${GREEN}解析后的配置:${RESET}"
@@ -213,14 +216,25 @@ view_snell_config() {
         echo "所在国家: ${IP_COUNTRY}"
         echo "端口: ${PORT}"
         echo "PSK: ${PSK}"
+        
+        # 检查端口号和 PSK 是否正确提取
+        if [ -z "${PORT}" ]; then
+            echo -e "${RED}端口解析失败，请检查配置文件。${RESET}"
+        fi
+        
+        if [ -z "${PSK}" ]; then
+            echo -e "${RED}PSK 解析失败，请检查配置文件。${RESET}"
+        fi
+        
         echo -e "${GREEN}${IP_COUNTRY} = snell, ${HOST_IP}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
         
-        # 等待用户按任意键返回菜单
+        # 等待用户按任意键返回主菜单
         read -p "按任意键返回主菜单..."
     else
         echo -e "${RED}Snell 配置文件不存在。${RESET}"
     fi
 }
+
 
 # 获取当前安装的 Snell 版本
 get_current_snell_version() {
