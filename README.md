@@ -35,6 +35,7 @@ When you run the script, you will see the following menu:
 2) 卸载 Snell
 3) 查看 Snell 配置
 4) 检查 Snell 更新
+5) 更新脚本
 0) 退出
 请选择操作:
 ```
@@ -52,7 +53,9 @@ When you run the script, you will see the following menu:
   + Displays the current Snell configuration, including the IP address, port, and password.
 4. 检查 Snell 更新:
   + Automatically checks for the latest Snell version and offers easy upgrading options, keeping the proxy service up-to-date with minimal effort.
-5. 退出
+5. 更新脚本
+  + Update script 
+6. 退出
   + Exits the script.
 
 ## Example Output
