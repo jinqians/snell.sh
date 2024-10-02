@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.0.1"
+current_version="1.2"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -35,6 +35,23 @@ check_root() {
     if [ "$(id -u)" != "0" ]; then
         echo -e "${RED}请以 root 权限运行此脚本.${RESET}"
         exit 1
+    fi
+}
+
+# 检查 jq 是否安装
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
+        # 根据系统类型安装 jq
+        if [ -x "$(command -v apt)" ]; then
+            wait_for_apt
+            apt update && apt install -y jq
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y jq
+        else
+            echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
+            exit 1
+        fi
     fi
 }
 
@@ -82,6 +99,36 @@ version_greater_equal() {
     return 0
 }
 
+# 用户输入端口号，范围 1-65535
+get_user_port() {
+    while true; do
+        read -rp "请输入要使用的端口号 (1-65535): " PORT
+        if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+            echo -e "${GREEN}已选择端口: $PORT${RESET}"
+            break
+        else
+            echo -e "${RED}无效端口号，请输入 1 到 65535 之间的数字。${RESET}"
+        fi
+    done
+}
+
+# 开放端口 (ufw 和 iptables)
+open_port() {
+    local PORT=$1
+    # 检查 ufw 是否已安装
+    if command -v ufw &> /dev/null; then
+        echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
+        ufw allow "$PORT"/tcp
+    fi
+
+    # 检查 iptables 是否已安装
+    if command -v iptables &> /dev/null; then
+        echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
+        iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+        iptables-save > /etc/iptables/rules.v4
+    fi
+}
+
 # 安装 Snell
 install_snell() {
     echo -e "${CYAN}正在安装 Snell${RESET}"
@@ -114,14 +161,14 @@ install_snell() {
     rm snell-server.zip
     chmod +x ${INSTALL_DIR}/snell-server
 
-    RANDOM_PORT=$(shuf -i 30000-65000 -n 1)
+    get_user_port  # 获取用户输入的端口
     RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
     mkdir -p ${SNELL_CONF_DIR}
 
     cat > ${SNELL_CONF_FILE} << EOF
 [snell-server]
-listen = ::0:${RANDOM_PORT}
+listen = ::0:${PORT}
 psk = ${RANDOM_PSK}
 ipv6 = true
 EOF
@@ -164,11 +211,14 @@ EOF
         exit 1
     fi
 
+    # 开放端口
+    open_port "$PORT"
+
     HOST_IP=$(curl -s http://checkip.amazonaws.com)
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = 4, reuse = true, tfo = true"
+    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${PORT}, psk = ${RANDOM_PSK}, version = 4, reuse = true, tfo = true"
 }
 
 # 卸载 Snell
@@ -267,6 +317,39 @@ check_snell_update() {
     fi
 }
 
+# 获取最新 GitHub 版本
+get_latest_github_version() {
+    GITHUB_VERSION_INFO=$(curl -s https://api.github.com/repos/jinqians/snell.sh/releases/latest)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}无法获取 GitHub 上的最新版本信息。${RESET}"
+        exit 1
+    fi
+
+    GITHUB_VERSION=$(echo "$GITHUB_VERSION_INFO" | jq -r '.name' | awk '{print $NF}')
+    if [ -z "$GITHUB_VERSION" ]; then
+        echo -e "${RED}获取 GitHub 版本失败。${RESET}"
+        exit 1
+    fi
+}
+
+# 更新脚本
+update_script() {
+    get_latest_github_version
+
+    if version_greater_equal "$CURRENT_VERSION" "$GITHUB_VERSION"; then
+        echo -e "${GREEN}当前版本 (${CURRENT_VERSION}) 已是最新，无需更新。${RESET}"
+    else
+        # 使用 curl 下载脚本并覆盖当前脚本
+        curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}脚本更新成功！已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
+            echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
+            exec "$0"  # 重新执行当前脚本
+        else
+            echo -e "${RED}脚本更新失败！${RESET}"
+        fi
+    fi
+}
 
 # 主菜单
 while true; do
@@ -282,6 +365,7 @@ while true; do
     echo "2) 卸载 Snell"
     echo "3) 查看 Snell 配置"
     echo "4) 检查 Snell 更新"
+    echo "5) 更新脚本"
     echo "0) 退出"
     read -rp "请选择操作: " choice
 
@@ -297,6 +381,9 @@ while true; do
             ;;
         4)
             check_snell_update
+            ;;
+        5)
+            update_script
             ;;
         0)
             exit 0
