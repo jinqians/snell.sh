@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.2"
+current_version="1.4"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -37,6 +37,7 @@ check_root() {
         exit 1
     fi
 }
+check_root
 
 # 检查 jq 是否安装
 check_jq() {
@@ -54,6 +55,7 @@ check_jq() {
         fi
     fi
 }
+check_jq
 
 # 检查 Snell 是否已安装
 check_snell_installed() {
