@@ -63,5 +63,7 @@ After installing Snell, the script will display the configuration details:
 ```shell
 Snell 安装成功
 CN = snell, 123.456.789.012, 54321, psk = abcdefghijklmnopqrst, version = 4, reuse = true, tfo = true
+CN = snell, ::1, 54321, psk = abcdefghijklmnopqrst, version = 4, reuse = true, tfo = true
+
 ```
 
