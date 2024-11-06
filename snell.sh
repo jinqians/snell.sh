@@ -257,7 +257,7 @@ view_snell_config() {
         cat "${SNELL_CONF_FILE}"
         
         # 解析配置文件中的信息
-        HOST_IP=$(curl -s http://checkip.amazonaws.com)
+        HOST_IP=$(curl -s ip.sb -4)
         IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
         
         # 提取端口号 - 提取 "::0:" 后面的部分
