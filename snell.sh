@@ -216,7 +216,7 @@ EOF
     # 开放端口
     open_port "$PORT"
 
-    HOST_IP=$(curl -s http://checkip.amazonaws.com)
+    HOST_IP=$(curl -s ip.sb -4)
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
