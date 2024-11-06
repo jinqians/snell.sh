@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================
 # 作者: jinqian
-# 日期: 2024年9月
+# 日期: 2024年11月
 # 网站：jinqians.com
 # 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理
 # =========================================
@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.4"
+current_version="1.5"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -216,11 +216,41 @@ EOF
     # 开放端口
     open_port "$PORT"
 
-    HOST_IP=$(curl -s ip.sb -4)
-    IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
+    # 解析配置文件中的信息
+    # 获取 IPv4 地址
+    IPV4_ADDR=$(curl -s -4 ip.sb)
+    
+    # 获取 IPv6 地址
+    IPV6_ADDR=$(curl -s -6 ip.sb)
+    
+    # 检查是否获取到 IPv4 和 IPv6 地址
+    if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
+        echo -e "${RED}无法获取到公网 IP 地址，请检查网络连接。${RESET}"
+        return
+    fi
+
+    echo -e "\n公网 IP 地址信息："
+    
+    # 如果有 IPv4 地址
+    if [ ! -z "$IPV4_ADDR" ]; then
+        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+        echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
+    fi
+
+    # 如果有 IPv6 地址
+    if [ ! -z "$IPV6_ADDR" ]; then
+        IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+        echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
+    fi
 
     echo -e "${GREEN}Snell 安装成功${RESET}"
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${PORT}, psk = ${RANDOM_PSK}, version = 4, reuse = true, tfo = true"
+    if [ ! -z "$IPV4_ADDR" ]; then
+        echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+    fi
+    
+    if [ ! -z "$IPV6_ADDR" ]; then
+        echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+    fi
 }
 
 # 卸载 Snell
@@ -257,8 +287,31 @@ view_snell_config() {
         cat "${SNELL_CONF_FILE}"
         
         # 解析配置文件中的信息
-        HOST_IP=$(curl -s ip.sb -4)
-        IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
+        # 获取 IPv4 地址
+        IPV4_ADDR=$(curl -s -4 ip.sb)
+        
+        # 获取 IPv6 地址
+        IPV6_ADDR=$(curl -s -6 ip.sb)
+        
+        # 检查是否获取到 IPv4 和 IPv6 地址
+        if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
+            echo -e "${RED}无法获取到公网 IP 地址，请检查网络连接。${RESET}"
+            return
+        fi
+
+        echo -e "\n公网 IP 地址信息："
+        
+        # 如果有 IPv4 地址
+        if [ ! -z "$IPV4_ADDR" ]; then
+            IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+            echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
+        fi
+
+        # 如果有 IPv6 地址
+        if [ ! -z "$IPV6_ADDR" ]; then
+            IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+            echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
+        fi
         
         # 提取端口号 - 提取 "::0:" 后面的部分
         PORT=$(grep -E '^listen' "${SNELL_CONF_FILE}" | sed -n 's/.*::0:\([0-9]*\)/\1/p')
@@ -267,8 +320,6 @@ view_snell_config() {
         PSK=$(grep -E '^psk' "${SNELL_CONF_FILE}" | awk -F'=' '{print $2}' | tr -d ' ')
         
         echo -e "${GREEN}解析后的配置:${RESET}"
-        echo "外网IP: ${HOST_IP}"
-        echo "所在国家: ${IP_COUNTRY}"
         echo "端口: ${PORT}"
         echo "PSK: ${PSK}"
         
@@ -281,8 +332,15 @@ view_snell_config() {
             echo -e "${RED}PSK 解析失败，请检查配置文件。${RESET}"
         fi
         
-        echo -e "${GREEN}${IP_COUNTRY} = snell, ${HOST_IP}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+        # 输出最终配置，只输出有效的 IP 配置信息
+        if [ ! -z "$IPV4_ADDR" ]; then
+            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+        fi
         
+        if [ ! -z "$IPV6_ADDR" ]; then
+            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+        fi
+
         # 等待用户按任意键返回主菜单
         read -p "按任意键返回主菜单..."
     else
