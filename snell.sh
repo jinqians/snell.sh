@@ -415,7 +415,7 @@ update_script() {
 setup_bbr() {
     BBR_SCRIPT="/tmp/bbr_setup.sh"
     if [ ! -f "$BBR_SCRIPT" ]; then
-        echo -e "${CYAN}下载 BBR 安装脚本...${RESET}"
+        echo -e "${CYAN}下载 BBR 管理脚本...${RESET}"
         curl -s -o "$BBR_SCRIPT" "https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/bbr.sh"
         if [ $? -ne 0 ]; then
             echo -e "${RED}下载 BBR 脚本失败。${RESET}"
@@ -423,8 +423,12 @@ setup_bbr() {
         fi
     fi
     chmod +x "$BBR_SCRIPT"
+    
+    echo -e "${YELLOW}正在进入 BBR 管理菜单...${RESET}"
     source "$BBR_SCRIPT"
+    
     # BBR 脚本执行完毕后会自动返回这里
+    echo -e "${GREEN}BBR 管理操作完成。${RESET}"
     echo -e "${CYAN}按任意键返回主菜单...${RESET}"
     read -n 1 -s -r
 }
