@@ -13,6 +13,45 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# 检查并安装 sudo
+check_and_install_sudo() {
+    if ! command -v sudo &> /dev/null; then
+        echo -e "${YELLOW}sudo 未安装，正在尝试安装...${RESET}"
+        apt update
+        apt install -y sudo
+        if ! command -v sudo &> /dev/null; then
+            echo -e "${RED}sudo 安装失败。脚本将以 root 权限继续执行。${RESET}"
+            return 1
+        else
+            echo -e "${GREEN}sudo 安装成功。${RESET}"
+            return 0
+        fi
+    else
+        return 0
+    fi
+}
+check_and_install_sudo
+
+# 检查并安装必要的包
+check_and_install_packages() {
+    local packages=("wget" "gnupg" "software-properties-common")
+    for package in "${packages[@]}"; do
+        if ! command -v $package &> /dev/null; then
+            echo -e "${YELLOW}$package 未安装，正在尝试安装...${RESET}"
+            sudo apt update
+            sudo apt install -y $package
+            if ! command -v $package &> /dev/null; then
+                echo -e "${RED}$package 安装失败。${RESET}"
+                return 1
+            else
+                echo -e "${GREEN}$package 安装成功。${RESET}"
+            fi
+        fi
+    done
+    return 0
+}
+check_and_install_packages
+
 # 检查系统类型
 check_system() {
     if [ -f /etc/os-release ]; then
@@ -88,19 +127,45 @@ check_bbr3_support() {
 install_xanmod_kernel() {
     echo -e "${YELLOW}正在安装支持 BBR v3 的最新 XanMod 内核...${RESET}"
     
+    # 添加 XanMod 仓库的 GPG 密钥
+    if ! wget -qO - https://dl.xanmod.org/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/xanmod-archive-keyring.gpg; then
+        echo -e "${RED}下载或导入 XanMod GPG 密钥失败。${RESET}"
+        return 1
+    fi
+
     # 添加 XanMod 仓库
-    wget -qO - https://dl.xanmod.org/gpg.key | apt-key add -
-    echo 'deb http://deb.xanmod.org releases main' | tee /etc/apt/sources.list.d/xanmod-kernel.list
+    if ! echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org releases main' | sudo tee /etc/apt/sources.list.d/xanmod-release.list > /dev/null; then
+        echo -e "${RED}添加 XanMod 仓库失败。${RESET}"
+        return 1
+    fi
+
+    # 手动添加 XanMod 的 GPG 密钥
+    if ! sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 86F7D09EE734E623; then
+        echo -e "${RED}手动添加 XanMod GPG 密钥失败。${RESET}"
+        return 1
+    fi
     
-    # 更新包列表并安装最新的 XanMod 内核
-    apt update
-    apt install -y linux-xanmod-x64v4
+    # 更新包列表
+    if ! sudo apt update; then
+        echo -e "${RED}更新包列表失败。${RESET}"
+        return 1
+    fi
+
+    # 安装最新的 XanMod 内核
+    if ! sudo apt install -y linux-xanmod-x64v4; then
+        echo -e "${RED}安装 XanMod 内核失败。${RESET}"
+        return 1
+    fi
     
     # 更新 GRUB
-    update-grub
+    if ! sudo update-grub; then
+        echo -e "${RED}更新 GRUB 失败。${RESET}"
+        return 1
+    fi
     
     echo -e "${GREEN}支持 BBR v3 的 XanMod 内核安装完成。${RESET}"
     echo -e "${YELLOW}请重启系统后，BBR v3 将可以启用。${RESET}"
+    return 0
 }
 
 # 配置系统参数和启用 BBR/BBR3
