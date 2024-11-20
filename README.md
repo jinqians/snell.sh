@@ -36,6 +36,7 @@ When you run the script, you will see the following menu:
 3) 查看 Snell 配置
 4) 检查 Snell 更新
 5) 更新脚本
+6) 安装/配置bbr
 0) 退出
 请选择操作:
 ```
