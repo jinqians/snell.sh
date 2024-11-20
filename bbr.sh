@@ -190,7 +190,7 @@ main_menu() {
             2)
                 enable_bbr3
                 ;;
-            3)
+            0)
                 echo -e "${GREEN}正在返回上一级菜单...${RESET}"
                 return 0
                 ;;
