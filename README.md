@@ -54,7 +54,9 @@ When you run the script, you will see the following menu:
 4. 检查 Snell 更新:
   + Automatically checks for the latest Snell version and offers easy upgrading options, keeping the proxy service up-to-date with minimal effort.
 5. 更新脚本
-  + Update script 
+  + Update script
+6. 安装/配置bbr
+  + Install / Configure bbr
 6. 退出
   + Exits the script.
 
