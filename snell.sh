@@ -54,6 +54,7 @@ check_jq() {
         fi
     fi
 }
+jq()
 
 # 检查 Snell 是否已安装
 check_snell_installed() {
