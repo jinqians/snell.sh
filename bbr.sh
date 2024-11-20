@@ -40,56 +40,45 @@ check_swap() {
     fi
 }
 
-# 检查当前内核版本和 BBR 支持情况
+
 check_bbr_support() {
-    local kernel_version=$(uname -r)
-    local major_version=$(echo $kernel_version | cut -d. -f1)
-    local minor_version=$(echo $kernel_version | cut -d. -f2)
-    
+    local kernel_version=$(uname -r | cut -d'-' -f1)
     echo -e "${CYAN}当前内核版本: ${kernel_version}${RESET}"
 
-    if lsmod | grep -q tcp_bbr && sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
-        echo -e "${GREEN}BBR 已经启用。${RESET}"
-        return 0
-    elif (( major_version > 4 || (major_version == 4 && minor_version >= 9) )); then
-        if modprobe tcp_bbr &> /dev/null; then
+    if [[ $(echo "$kernel_version 4.9" | tr " " "\n" | sort -V | head -n1) == "4.9" ]]; then
+        if lsmod | grep -q tcp_bbr && sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+            echo -e "${GREEN}BBR 已经启用。${RESET}"
+            return 0
+        else
             echo -e "${YELLOW}当前内核支持 BBR，但未启用。${RESET}"
             return 1
-        else
-            echo -e "${YELLOW}当前内核版本应该支持 BBR，但无法加载 BBR 模块。可能需要额外配置。${RESET}"
-            return 2
         fi
     else
         echo -e "${YELLOW}当前内核版本不支持 BBR。需要 4.9 或更高版本。${RESET}"
-        return 3
+        return 2
     fi
 }
 
 enable_bbr() {
-    local bbr_status=$(check_bbr_support)
+    check_bbr_support
+    local bbr_status=$?
+
     case $bbr_status in
         0)
             echo -e "${GREEN}BBR 已经启用，无需进一步操作。${RESET}"
             ;;
         1)
-            echo -e "${YELLOW}当前内核支持 BBR，但未启用。正在启用 BBR...${RESET}"
+            echo -e "${YELLOW}正在启用 BBR...${RESET}"
             configure_system_and_bbr
             ;;
         2)
-            echo -e "${YELLOW}当前内核版本应该支持 BBR，但无法加载 BBR 模块。尝试配置 BBR...${RESET}"
-            configure_system_and_bbr
-            ;;
-        3)
-            echo -e "${YELLOW}当前内核版本不支持 BBR。需要 4.9 或更高版本。${RESET}"
+            echo -e "${YELLOW}当前内核版本不支持 BBR。需要更新内核。${RESET}"
             read -p "是否要更新内核以支持 BBR？(y/n): " update_choice
             if [[ $update_choice == "y" || $update_choice == "Y" ]]; then
                 update_kernel_for_bbr
             else
                 echo -e "${YELLOW}已取消更新内核，BBR 将无法启用。${RESET}"
             fi
-            ;;
-        *)
-            echo -e "${RED}检查 BBR 支持状态时出现错误。${RESET}"
             ;;
     esac
 }
