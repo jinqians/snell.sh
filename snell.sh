@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.7"
+current_version="1.8"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
