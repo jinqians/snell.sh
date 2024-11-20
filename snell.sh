@@ -164,14 +164,14 @@ install_snell() {
     chmod +x ${INSTALL_DIR}/snell-server
 
     get_user_port  # 获取用户输入的端口
-    RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
+    PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
     mkdir -p ${SNELL_CONF_DIR}
 
     cat > ${SNELL_CONF_FILE} << EOF
 [snell-server]
 listen = ::0:${PORT}
-psk = ${RANDOM_PSK}
+psk = ${PSK}
 ipv6 = true
 EOF
 
@@ -411,6 +411,24 @@ update_script() {
     fi
 }
 
+#开启bbr
+setup_bbr() {
+    BBR_SCRIPT="/tmp/bbr_setup.sh"
+    if [ ! -f "$BBR_SCRIPT" ]; then
+        echo -e "${CYAN}下载 BBR 安装脚本...${RESET}"
+        curl -s -o "$BBR_SCRIPT" "https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/bbr.sh"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}下载 BBR 脚本失败。${RESET}"
+            return 1
+        fi
+    fi
+    chmod +x "$BBR_SCRIPT"
+    source "$BBR_SCRIPT"
+    # BBR 脚本执行完毕后会自动返回这里
+    echo -e "${CYAN}按任意键返回主菜单...${RESET}"
+    read -n 1 -s -r
+}
+
 # 主菜单
 while true; do
     echo -e "${RED} ========================================= ${RESET}"
@@ -426,6 +444,7 @@ while true; do
     echo "3) 查看 Snell 配置"
     echo "4) 检查 Snell 更新"
     echo "5) 更新脚本"
+    echo "6) 安装/配置 BBR"
     echo "0) 退出"
     read -rp "请选择操作: " choice
 
@@ -444,6 +463,9 @@ while true; do
             ;;
         5)
             update_script
+            ;;
+        6)
+            setup_bbr
             ;;
         0)
             exit 0
