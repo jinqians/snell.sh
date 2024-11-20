@@ -168,7 +168,7 @@ main_menu() {
         echo "2. 启用 BBR v3"
         echo "0. 返回上一级菜单"
         echo "------------------------"
-        read -p "请输入选项 [1-3]: " choice
+        read -p "请输入选项 [0-2]: " choice
 
         case $choice in
             1)
