@@ -43,17 +43,25 @@ check_swap() {
 # 检查当前内核版本和 BBR 支持情况
 check_bbr_support() {
     local kernel_version=$(uname -r)
+    local major_version=$(echo $kernel_version | cut -d. -f1)
+    local minor_version=$(echo $kernel_version | cut -d. -f2)
+    
     echo -e "${CYAN}当前内核版本: ${kernel_version}${RESET}"
 
-    if lsmod | grep -q tcp_bbr; then
+    if lsmod | grep -q tcp_bbr && sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
         echo -e "${GREEN}BBR 已经启用。${RESET}"
         return 0
-    elif [[ $(echo $kernel_version | cut -d. -f1) -ge 4 && $(echo $kernel_version | cut -d. -f2) -ge 9 ]]; then
-        echo -e "${GREEN}当前内核支持 BBR。${RESET}"
-        return 0
+    elif (( major_version > 4 || (major_version == 4 && minor_version >= 9) )); then
+        if modprobe tcp_bbr &> /dev/null; then
+            echo -e "${GREEN}当前内核支持 BBR，但未启用。${RESET}"
+            return 1
+        else
+            echo -e "${YELLOW}当前内核版本应该支持 BBR，但无法加载 BBR 模块。可能需要额外配置。${RESET}"
+            return 3
+        fi
     else
         echo -e "${YELLOW}当前内核版本不支持 BBR。需要 4.9 或更高版本。${RESET}"
-        return 1
+        return 2
     fi
 }
 
