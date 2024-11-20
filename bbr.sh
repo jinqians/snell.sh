@@ -53,16 +53,54 @@ check_bbr_support() {
         return 0
     elif (( major_version > 4 || (major_version == 4 && minor_version >= 9) )); then
         if modprobe tcp_bbr &> /dev/null; then
-            echo -e "${GREEN}当前内核支持 BBR，但未启用。${RESET}"
+            echo -e "${YELLOW}当前内核支持 BBR，但未启用。${RESET}"
             return 1
         else
             echo -e "${YELLOW}当前内核版本应该支持 BBR，但无法加载 BBR 模块。可能需要额外配置。${RESET}"
-            return 3
+            return 2
         fi
     else
         echo -e "${YELLOW}当前内核版本不支持 BBR。需要 4.9 或更高版本。${RESET}"
-        return 2
+        return 3
     fi
+}
+
+enable_bbr() {
+    local bbr_status=$(check_bbr_support)
+    case $bbr_status in
+        0)
+            echo -e "${GREEN}BBR 已经启用，无需进一步操作。${RESET}"
+            ;;
+        1)
+            echo -e "${YELLOW}当前内核支持 BBR，但未启用。正在启用 BBR...${RESET}"
+            configure_system_and_bbr
+            ;;
+        2)
+            echo -e "${YELLOW}当前内核版本应该支持 BBR，但无法加载 BBR 模块。尝试配置 BBR...${RESET}"
+            configure_system_and_bbr
+            ;;
+        3)
+            echo -e "${YELLOW}当前内核版本不支持 BBR。需要 4.9 或更高版本。${RESET}"
+            read -p "是否要更新内核以支持 BBR？(y/n): " update_choice
+            if [[ $update_choice == "y" || $update_choice == "Y" ]]; then
+                update_kernel_for_bbr
+            else
+                echo -e "${YELLOW}已取消更新内核，BBR 将无法启用。${RESET}"
+            fi
+            ;;
+        *)
+            echo -e "${RED}检查 BBR 支持状态时出现错误。${RESET}"
+            ;;
+    esac
+}
+
+update_kernel_for_bbr() {
+    echo -e "${YELLOW}正在更新内核以支持 BBR...${RESET}"
+    # 这里添加更新内核的具体步骤
+    apt update
+    apt install -y linux-generic
+    update-grub
+    echo -e "${GREEN}内核已更新。请重启系统后再次运行此脚本以启用 BBR。${RESET}"
 }
 
 # 检查 BBR v3 支持
