@@ -51,15 +51,16 @@ check_snell() {
     return 0
 }
 
-# 获取 Snell 配置
-get_snell_config() {
-    if [ ! -f "/etc/snell/snell-server.conf" ]; then
-        echo -e "${RED}未找到 Snell 配置文件${RESET}"
+# 获取 Snell 端口
+get_snell_port() {
+    local snell_conf="/etc/snell/snell-server.conf"
+    if [ ! -f "$snell_conf" ]; then
+        echo -e "${RED}Snell 配置文件不存在${RESET}"
         return 1
     fi
     
-    # 读取 Snell 配置，确保获取到单行结果
-    local snell_port=$(grep "listen" /etc/snell/snell-server.conf | grep -oP ':\K[0-9]+' | tr -d '\n')
+    # 获取端口并去掉前导零
+    local snell_port=$(grep -E '^listen' "$snell_conf" | sed -n 's/.*::0:\([0-9]*\)/\1/p' | sed 's/^0*//')
     if [ -z "$snell_port" ]; then
         echo -e "${RED}无法读取 Snell 端口配置${RESET}"
         return 1
@@ -138,7 +139,7 @@ install_shadowtls() {
     fi
     
     # 获取 Snell 端口
-    local snell_port=$(get_snell_config)
+    local snell_port=$(get_snell_port)
     if [ $? -ne 0 ]; then
         return 1
     fi
@@ -187,6 +188,10 @@ install_shadowtls() {
     # 获取服务器IP和Snell PSK
     local server_ip=$(get_server_ip)
     local snell_psk=$(get_snell_psk)
+    
+    # 获取 Snell 端口
+    local snell_port=$(get_snell_port)
+    snell_port=$(echo "$snell_port" | sed 's/^0*//')
     
     # 创建系统服务
     cat > "$SERVICE_FILE" << EOF
