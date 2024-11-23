@@ -1,6 +1,6 @@
 #!/bin/bash
 # =========================================
-# 作者: jinqian
+# 作者: jinqians
 # 日期: 2024年11月
 # 网站：jinqians.com
 # 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理
@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.9.3"
+current_version="1.9.2"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -113,6 +113,18 @@ get_user_port() {
     done
 }
 
+# 获取用户输入的 DNS 服务器
+get_dns() {
+    read -rp "请输入 DNS 服务器地址 (直接回车使用默认 1.1.1.1,8.8.8.8): " custom_dns
+    if [ -z "$custom_dns" ]; then
+        DNS="1.1.1.1,8.8.8.8"
+        echo -e "${GREEN}使用默认 DNS 服务器: $DNS${RESET}"
+    else
+        DNS=$custom_dns
+        echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
+    fi
+}
+
 # 开放端口 (ufw 和 iptables)
 open_port() {
     local PORT=$1
@@ -163,6 +175,7 @@ install_snell() {
     chmod +x ${INSTALL_DIR}/snell-server
 
     get_user_port  # 获取用户输入的端口
+    get_dns # 获取用户输入的 DNS 服务器
     PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
     mkdir -p ${SNELL_CONF_DIR}
@@ -172,6 +185,7 @@ install_snell() {
 listen = ::0:${PORT}
 psk = ${PSK}
 ipv6 = true
+dns = ${DNS}
 EOF
 
     cat > ${SYSTEMD_SERVICE_FILE} << EOF
@@ -282,8 +296,13 @@ uninstall_snell() {
 
 view_snell_config() {
     if [ -f "${SNELL_CONF_FILE}" ]; then
-        echo -e "${GREEN}当前 Snell 配置:${RESET}"
-        cat "${SNELL_CONF_FILE}"
+        echo -e "${GREEN}Snell 配置信息:${RESET}"
+        echo -e "${CYAN}--------------------------------${RESET}"
+        echo -e "${YELLOW}监听地址: $(grep "listen" ${SNELL_CONF_FILE} | cut -d= -f2 | tr -d ' ')${RESET}"
+        echo -e "${YELLOW}PSK 密钥: $(grep "psk" ${SNELL_CONF_FILE} | cut -d= -f2 | tr -d ' ')${RESET}"
+        echo -e "${YELLOW}IPv6: $(grep "ipv6" ${SNELL_CONF_FILE} | cut -d= -f2 | tr -d ' ')${RESET}"
+        echo -e "${YELLOW}DNS 服务器: $(grep "dns" ${SNELL_CONF_FILE} | cut -d= -f2 | tr -d ' ')${RESET}"
+        echo -e "${CYAN}--------------------------------${RESET}"
         
         # 解析配置文件中的信息
         # 获取 IPv4 地址
@@ -395,9 +414,10 @@ get_latest_github_version() {
 update_script() {
     get_latest_github_version
 
-    if version_greater_equal "$CURRENT_VERSION" "$GITHUB_VERSION"; then
-        echo -e "${GREEN}当前版本 (${CURRENT_VERSION}) 已是最新，无需更新。${RESET}"
+    if version_greater_equal "$current_version" "$GITHUB_VERSION"; then
+        echo -e "${GREEN}当前版本 (${current_version}) 已是最新，无需更新。${RESET}"
     else
+        echo -e "${YELLOW}发现新版本：${GITHUB_VERSION}，当前版本：${current_version}${RESET}"
         # 使用 curl 下载脚本并覆盖当前脚本
         curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
         if [ $? -eq 0 ]; then
@@ -410,48 +430,121 @@ update_script() {
     fi
 }
 
-#开启bbr
-setup_bbr() {
-    BBR_SCRIPT="/tmp/bbr_setup.sh"
-    if [ ! -f "$BBR_SCRIPT" ]; then
-        echo -e "${CYAN}下载 BBR 管理脚本...${RESET}"
-        curl -s -o "$BBR_SCRIPT" "https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/bbr.sh"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}下载 BBR 脚本失败。${RESET}"
-            return 1
-        fi
+# 检查服务状态的函数
+check_service_status() {
+    local service=$1
+    if systemctl is-active --quiet "$service"; then
+        echo -e "${GREEN}运行中${RESET}"
+    else
+        echo -e "${RED}未运行${RESET}"
     fi
-    chmod +x "$BBR_SCRIPT"
+}
+
+# 检查是否安装的函数
+check_installation() {
+    local service=$1
+    if systemctl list-unit-files | grep -q "^$service.service"; then
+        echo -e "${GREEN}已安装${RESET}"
+    else
+        echo -e "${RED}未安装${RESET}"
+    fi
+}
+
+# 获取 ShadowTLS 配置
+get_shadowtls_config() {
+    if [ ! -f "/etc/shadowtls/config.json" ]; then
+        return 1
+    fi
     
-    echo -e "${YELLOW}正在进入 BBR 管理菜单...${RESET}"
-    source "$BBR_SCRIPT"
+    local config_file="/etc/shadowtls/config.json"
+    local listen_port=$(grep -o '"listen": "[^"]*"' "$config_file" | cut -d'"' -f4 | cut -d':' -f2)
+    local password=$(grep -o '"password": "[^"]*"' "$config_file" | cut -d'"' -f4)
+    local tls_domain=$(grep -o '"server_name": "[^"]*"' "$config_file" | cut -d'"' -f4)
     
-    # BBR 脚本执行完毕后会自动返回这里
-    echo -e "${GREEN}BBR 管理操作完成。${RESET}"
-    echo -e "${CYAN}按任意键返回主菜单...${RESET}"
-    read -n 1 -s -r
+    echo "$listen_port|$password|$tls_domain"
+    return 0
+}
+
+# 显示服务状态
+show_status() {
+    echo -e "\n${YELLOW}=== 服务状态 ===${RESET}"
+    echo -e "Snell 安装状态: $(check_installation snell)"
+    echo -e "Snell 运行状态: $(check_service_status snell)"
+    echo -e "ShadowTLS 安装状态: $(check_installation shadowtls)"
+    echo -e "ShadowTLS 运行状态: $(check_service_status shadowtls)"
+    echo
+}
+
+# 显示配置信息
+show_config() {
+    local snell_port=$(grep -oP 'listen = \K[0-9]+' /etc/snell/snell-server.conf)
+    local psk=$(grep -oP 'psk = \K[^[:space:]]+' /etc/snell/snell-server.conf)
+    
+    echo -e "\n${YELLOW}=== 配置信息 ===${RESET}"
+    
+    # 基础 Snell 配置
+    echo -e "\n${GREEN}Snell 配置：${RESET}"
+    echo -e "snell = snell, [服务器IP], ${snell_port}, psk=${psk}, version=4"
+    
+    # 如果 ShadowTLS 已安装，显示组合配置
+    if shadowtls_config=$(get_shadowtls_config); then
+        IFS='|' read -r tls_port tls_password tls_domain <<< "$shadowtls_config"
+        
+        echo -e "\n${GREEN}Snell + ShadowTLS 配置：${RESET}"
+        echo -e "snell = snell, [服务器IP], ${tls_port}, psk=${psk}, version=4, shadow-tls-password=${tls_password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
+    fi
+    
+    echo -e "\n${YELLOW}注意：请将 [服务器IP] 替换为实际的服务器IP地址${RESET}"
 }
 
 # 主菜单
-while true; do
+show_menu() {
     echo -e "${RED} ========================================= ${RESET}"
     echo -e "${RED} 作者: jinqian ${RESET}"
     echo -e "${RED} 网站：https://jinqians.com ${RESET}"
     echo -e "${RED} 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理 ${RESET}"
     echo -e "${RED} ========================================= ${RESET}"
 
-
     echo -e "${CYAN} ============== Snell 管理工具 ============== ${RESET}"
     echo "1) 安装 Snell"
     echo "2) 卸载 Snell"
-    echo "3) 查看 Snell 配置"
-    echo "4) 检查 Snell 更新"
+    echo "3) 查看配置"
+    echo "4) 重启服务"
     echo "5) 更新脚本"
-    echo "6) 安装/配置 BBR"
-    echo "0) 退出"
-    read -rp "请选择操作: " choice
 
-    case "$choice" in
+    echo -e "${CYAN} ============== 功能增强 ============== ${RESET}"
+    echo "6) BBR 管理"
+    echo "7) ShadowTLS 管理"
+    echo "0) 退出"
+    read -rp "请选择操作: " num
+}
+
+#开启bbr
+setup_bbr() {
+    echo -e "${CYAN}正在获取并执行 BBR 管理脚本...${RESET}"
+    
+    # 直接从远程执行BBR脚本
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/bbr.sh)
+    
+    # BBR 脚本执行完毕后会自动返回这里
+    echo -e "${GREEN}BBR 管理操作完成${RESET}"
+    sleep 1  # 给用户一点时间看到提示
+}
+
+# ShadowTLS管理
+setup_shadowtls() {
+    echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh)
+    
+    # ShadowTLS 脚本执行完毕后会自动返回这里
+    echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
+    sleep 1  # 给用户一点时间看到提示
+}
+
+# 主菜单
+while true; do
+    show_menu
+    case "$num" in
         1)
             install_snell
             ;;
@@ -462,13 +555,16 @@ while true; do
             view_snell_config
             ;;
         4)
-            check_snell_update
+            systemctl restart snell
             ;;
         5)
             update_script
             ;;
         6)
             setup_bbr
+            ;;
+        7)
+            setup_shadowtls
             ;;
         0)
             exit 0
