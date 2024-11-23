@@ -69,6 +69,52 @@ get_snell_config() {
     return 0
 }
 
+# 获取 Snell PSK
+get_snell_psk() {
+    if [ ! -f "/etc/snell/snell-server.conf" ]; then
+        echo -e "${RED}未找到 Snell 配置文件${RESET}"
+        return 1
+    fi
+    
+    local snell_psk=$(grep "psk" /etc/snell/snell-server.conf | cut -d'=' -f2 | tr -d ' ')
+    if [ -z "$snell_psk" ]; then
+        echo -e "${RED}无法读取 Snell PSK 配置${RESET}"
+        return 1
+    fi
+    
+    echo "$snell_psk"
+    return 0
+}
+
+# 获取服务器IP
+get_server_ip() {
+    local ipv4
+    local ipv6
+    
+    # 获取IPv4地址
+    ipv4=$(curl -s -4 ip.sb 2>/dev/null)
+    
+    # 获取IPv6地址
+    ipv6=$(curl -s -6 ip.sb 2>/dev/null)
+    
+    # 判断IP类型并返回
+    if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
+        # 双栈，优先返回IPv4
+        echo "$ipv4"
+    elif [ -n "$ipv4" ]; then
+        # 仅IPv4
+        echo "$ipv4"
+    elif [ -n "$ipv6" ]; then
+        # 仅IPv6
+        echo "$ipv6"
+    else
+        echo -e "${RED}无法获取服务器 IP${RESET}"
+        return 1
+    fi
+    
+    return 0
+}
+
 # 检查 shadow-tls 命令格式
 check_shadowtls_command() {
     local help_output
@@ -131,7 +177,16 @@ install_shadowtls() {
     
     # 获取用户输入
     read -rp "请输入 ShadowTLS 监听端口 (1-65535): " listen_port
-    read -rp "请输入 TLS 伪装域名 (例如: www.microsoft.com): " tls_domain
+    read -rp "请输入 TLS 伪装域名 (直接回车默认为 www.microsoft.com): " tls_domain
+    
+    # 如果用户未输入域名，使用默认值
+    if [ -z "$tls_domain" ]; then
+        tls_domain="www.microsoft.com"
+    fi
+    
+    # 获取服务器IP和Snell PSK
+    local server_ip=$(get_server_ip)
+    local snell_psk=$(get_snell_psk)
     
     # 创建系统服务
     cat > "$SERVICE_FILE" << EOF
@@ -191,13 +246,15 @@ EOF
         return 1
     fi
     
-    # 清晰地显示配置信息
+    # 显示配置信息
     echo -e "\n${GREEN}=== ShadowTLS 安装成功 ===${RESET}"
     echo -e "\n${YELLOW}=== 服务器配置 ===${RESET}"
+    echo -e "服务器IP：${server_ip}"
     echo -e "监听地址：::0:${listen_port}"
     echo -e "后端地址：127.0.0.1:${snell_port}"
     echo -e "TLS域名：${tls_domain}"
     echo -e "密码：${password}"
+    echo -e "Snell PSK：${snell_psk}"
     
     echo -e "\n${YELLOW}=== Surge/Stash 配置参数 ===${RESET}"
     echo -e "shadow-tls-password=${password}"
@@ -205,7 +262,7 @@ EOF
     echo -e "shadow-tls-version=3"
     
     echo -e "\n${YELLOW}=== 完整配置示例 ===${RESET}"
-    echo -e "Snell = snell, [服务器IP], ${listen_port}, psk=[Snell密码], version=4, shadow-tls-password=${password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
+    echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk=${snell_psk}, version=4, shadow-tls-password=${password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
     
     echo -e "\n${GREEN}服务已启动并设置为开机自启${RESET}"
 }
