@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.0"
+current_version="1.9.2"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -37,6 +37,7 @@ check_root() {
         exit 1
     fi
 }
+check_root
 
 # 检查 jq 是否安装
 check_jq() {
@@ -304,7 +305,6 @@ view_snell_config() {
         echo -e "${YELLOW}DNS 服务器: $(grep "dns" ${SNELL_CONF_FILE} | cut -d= -f2 | tr -d ' ')${RESET}"
         echo -e "${CYAN}--------------------------------${RESET}"
         
-        # 解析配置文件中的信息
         # 获取 IPv4 地址
         IPV4_ADDR=$(curl -s -4 ip.sb)
         
@@ -331,17 +331,13 @@ view_snell_config() {
             echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
         fi
         
-        # 提取端口号 - 提取 "::0:" 后面的部分
         PORT=$(grep -E '^listen' "${SNELL_CONF_FILE}" | sed -n 's/.*::0:\([0-9]*\)/\1/p')
-        
-        # 提取 PSK
         PSK=$(grep -E '^psk' "${SNELL_CONF_FILE}" | awk -F'=' '{print $2}' | tr -d ' ')
         
         echo -e "${GREEN}解析后的配置:${RESET}"
         echo "端口: ${PORT}"
         echo "PSK: ${PSK}"
         
-        # 检查端口号和 PSK 是否正确提取
         if [ -z "${PORT}" ]; then
             echo -e "${RED}端口解析失败，请检查配置文件。${RESET}"
         fi
@@ -350,22 +346,38 @@ view_snell_config() {
             echo -e "${RED}PSK 解析失败，请检查配置文件。${RESET}"
         fi
         
-        # 输出最终配置，只输出有效的 IP 配置信息
+        echo -e "\n${GREEN}配置信息:${RESET}"
+        
+        # 输出原始 Snell 配置
         if [ ! -z "$IPV4_ADDR" ]; then
-            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
         fi
         
         if [ ! -z "$IPV6_ADDR" ]; then
-            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
+            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+        fi
+        
+        # 获取 ShadowTLS 配置并输出带 ShadowTLS 的配置
+        local shadowtls_config
+        if shadowtls_config=$(get_shadowtls_config); then
+            IFS='|' read -r stls_psk stls_domain stls_port <<< "$shadowtls_config"
+            
+            if [ ! -z "$IPV4_ADDR" ]; then
+                IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+                echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${PSK}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+            fi
+            
+            if [ ! -z "$IPV6_ADDR" ]; then
+                IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+                echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${PSK}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+            fi
         fi
 
-        # 等待用户按任意键返回主菜单
         read -p "按任意键返回主菜单..."
     else
         echo -e "${RED}Snell 配置文件不存在。${RESET}"
     fi
 }
-
 
 # 获取当前安装的 Snell 版本
 get_current_snell_version() {
@@ -452,16 +464,32 @@ check_installation() {
 
 # 获取 ShadowTLS 配置
 get_shadowtls_config() {
-    if [ ! -f "/etc/shadowtls/config.json" ]; then
+    if ! systemctl is-active --quiet shadowtls.service; then
         return 1
     fi
     
-    local config_file="/etc/shadowtls/config.json"
-    local listen_port=$(grep -o '"listen": "[^"]*"' "$config_file" | cut -d'"' -f4 | cut -d':' -f2)
-    local password=$(grep -o '"password": "[^"]*"' "$config_file" | cut -d'"' -f4)
-    local tls_domain=$(grep -o '"server_name": "[^"]*"' "$config_file" | cut -d'"' -f4)
+    local service_file="/etc/systemd/system/shadowtls.service"
+    if [ ! -f "$service_file" ]; then
+        return 1
+    fi
     
-    echo "$listen_port|$password|$tls_domain"
+    # 从服务文件中读取配置行
+    local exec_line=$(grep "ExecStart=" "$service_file")
+    if [ -z "$exec_line" ]; then
+        return 1
+    fi
+    
+    # 提取配置信息
+    local tls_domain=$(echo "$exec_line" | grep -o -- "--tls [^ ]*" | cut -d' ' -f2)
+    local password=$(echo "$exec_line" | grep -o -- "--password [^ ]*" | cut -d' ' -f2)
+    local listen_part=$(echo "$exec_line" | grep -o -- "--listen [^ ]*" | cut -d' ' -f2)
+    local listen_port=$(echo "$listen_part" | grep -o '[0-9]*$')
+    
+    if [ -z "$tls_domain" ] || [ -z "$password" ] || [ -z "$listen_port" ]; then
+        return 1
+    fi
+    
+    echo "${password}|${tls_domain}|${listen_port}"
     return 0
 }
 
@@ -491,32 +519,90 @@ show_config() {
         IFS='|' read -r tls_port tls_password tls_domain <<< "$shadowtls_config"
         
         echo -e "\n${GREEN}Snell + ShadowTLS 配置：${RESET}"
-        echo -e "snell = snell, [服务器IP], ${tls_port}, psk=${psk}, version=4, shadow-tls-password=${tls_password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
+        echo -e "snell = snell, [服务器IP], ${tls_port}, psk=${psk}, version=4, reuse = true, tfo = true, shadow-tls-password=${tls_password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
     fi
     
     echo -e "\n${YELLOW}注意：请将 [服务器IP] 替换为实际的服务器IP地址${RESET}"
 }
 
+# 检查服务状态并显示
+check_and_show_status() {
+    echo -e "\n${CYAN}=== 服务状态检查 ===${RESET}"
+    
+    # 检查 Snell 状态
+    if command -v snell-server &> /dev/null; then
+        echo -e "${GREEN}Snell 已安装${RESET}"
+        if systemctl is-active snell &> /dev/null; then
+            echo -e "${GREEN}Snell 服务运行中${RESET}"
+        else
+            echo -e "${RED}Snell 服务未运行${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}Snell 未安装${RESET}"
+    fi
+    
+    # 检查 ShadowTLS 状态
+    if [ -f "/usr/local/bin/shadow-tls" ]; then
+        echo -e "${GREEN}ShadowTLS 已安装${RESET}"
+        if systemctl is-active shadowtls &> /dev/null; then
+            echo -e "${GREEN}ShadowTLS 服务运行中${RESET}"
+        else
+            echo -e "${RED}ShadowTLS 服务未运行${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}ShadowTLS 未安装${RESET}"
+    fi
+    
+    echo -e "${CYAN}====================${RESET}\n"
+}
+
+# 检查是否以 root 权限运行
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}请以 root 权限运行此脚本${RESET}"
+        exit 1
+    fi
+}
+
+# 初始检查
+initial_check() {
+    check_root
+    check_and_show_status
+}
+
+# 运行初始检查
+initial_check
+
 # 主菜单
 show_menu() {
-    echo -e "${RED} ========================================= ${RESET}"
-    echo -e "${RED} 作者: jinqian ${RESET}"
-    echo -e "${RED} 网站：https://jinqians.com ${RESET}"
-    echo -e "${RED} 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理 ${RESET}"
-    echo -e "${RED} ========================================= ${RESET}"
-
-    echo -e "${CYAN} ============== Snell 管理工具 ============== ${RESET}"
-    echo "1) 安装 Snell"
-    echo "2) 卸载 Snell"
-    echo "3) 查看配置"
-    echo "4) 重启服务"
-    echo "5) 更新脚本"
-
-    echo -e "${CYAN} ============== 功能增强 ============== ${RESET}"
-    echo "6) BBR 管理"
-    echo "7) ShadowTLS 管理"
-    echo "0) 退出"
-    read -rp "请选择操作: " num
+    clear
+    echo -e "${CYAN}============================================${RESET}"
+    echo -e "${CYAN}          Snell 管理脚本 v${current_version}${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+    echo -e "${GREEN}作者: jinqian${RESET}"
+    echo -e "${GREEN}网站：https://jinqians.com${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+    
+    # 显示服务状态
+    check_and_show_status
+    
+    echo -e "${YELLOW}=== 基础功能 ===${RESET}"
+    echo -e "${GREEN}1.${RESET} 安装 Snell"
+    echo -e "${GREEN}2.${RESET} 卸载 Snell"
+    echo -e "${GREEN}3.${RESET} 查看配置"
+    
+    echo -e "\n${YELLOW}=== 增强功能 ===${RESET}"
+    echo -e "${GREEN}4.${RESET} ShadowTLS 管理"
+    echo -e "${GREEN}5.${RESET} BBR 管理"
+    
+    echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
+    echo -e "${GREEN}6.${RESET} 检查更新"
+    echo -e "${GREEN}7.${RESET} 更新脚本"
+    echo -e "${GREEN}8.${RESET} 查看服务状态"
+    echo -e "${GREEN}0.${RESET} 退出脚本"
+    
+    echo -e "${CYAN}============================================${RESET}"
+    read -rp "请输入选项 [0-8]: " num
 }
 
 #开启bbr
@@ -541,7 +627,7 @@ setup_shadowtls() {
     sleep 1  # 给用户一点时间看到提示
 }
 
-# 主菜单
+# 主循环
 while true; do
     show_menu
     case "$num" in
@@ -555,22 +641,29 @@ while true; do
             view_snell_config
             ;;
         4)
-            systemctl restart snell
-            ;;
-        5)
-            update_script
-            ;;
-        6)
-            setup_bbr
-            ;;
-        7)
             setup_shadowtls
             ;;
+        5)
+            setup_bbr
+            ;;
+        6)
+            check_snell_update
+            ;;
+        7)
+            update_script
+            ;;
+        8)
+            check_and_show_status
+            read -p "按任意键继续..."
+            ;;
         0)
+            echo -e "${GREEN}感谢使用，再见！${RESET}"
             exit 0
             ;;
         *)
-            echo -e "${RED}无效选项，请重试。${RESET}"
+            echo -e "${RED}请输入正确的选项 [0-8]${RESET}"
             ;;
     esac
+    echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
+    read -n 1 -s -r
 done
