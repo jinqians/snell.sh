@@ -16,7 +16,6 @@ RESET='\033[0m'
 # 安装目录和配置文件
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/shadowtls"
-CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/shadowtls.service"
 
 # 检查是否以 root 权限运行
@@ -59,8 +58,8 @@ get_snell_config() {
         return 1
     fi
     
-    # 读取 Snell 配置
-    local snell_port=$(grep -oP 'listen = \K[0-9]+' /etc/snell/snell-server.conf || echo "")
+    # 读取 Snell 配置，确保获取到单行结果
+    local snell_port=$(grep "listen" /etc/snell/snell-server.conf | grep -oP ':\K[0-9]+' | tr -d '\n')
     if [ -z "$snell_port" ]; then
         echo -e "${RED}无法读取 Snell 端口配置${RESET}"
         return 1
@@ -70,9 +69,21 @@ get_snell_config() {
     return 0
 }
 
+# 检查 shadow-tls 命令格式
+check_shadowtls_command() {
+    local help_output
+    help_output=$($INSTALL_DIR/shadow-tls --help 2>&1)
+    echo -e "${YELLOW}Shadow-tls 帮助信息：${RESET}"
+    echo "$help_output"
+    return 0
+}
+
 # 安装 ShadowTLS
 install_shadowtls() {
     echo -e "${CYAN}正在安装 ShadowTLS...${RESET}"
+    
+    # 检查命令格式
+    check_shadowtls_command
     
     # 检查 Snell 是否已安装
     if ! check_snell; then
@@ -85,9 +96,6 @@ install_shadowtls() {
     if [ $? -ne 0 ]; then
         return 1
     fi
-    
-    # 创建配置目录
-    mkdir -p "$CONFIG_DIR"
     
     # 获取系统架构
     arch=$(uname -m)
@@ -125,47 +133,71 @@ install_shadowtls() {
     read -rp "请输入 ShadowTLS 监听端口 (1-65535): " listen_port
     read -rp "请输入 TLS 伪装域名 (例如: www.microsoft.com): " tls_domain
     
-    # 创建配置文件
-    cat > "$CONFIG_FILE" << EOF
-{
-    "listen": "0.0.0.0:${listen_port}",
-    "server": "127.0.0.1:${snell_port}",
-    "tls": {
-        "server_name": "${tls_domain}"
-    },
-    "password": "${password}"
-}
-EOF
-    
     # 创建系统服务
     cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=ShadowTLS Service
-After=network.target snell.service
-Requires=snell.service
+Description=Shadow-TLS Server Service
+Documentation=man:sstls-server
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
-ExecStart=$INSTALL_DIR/shadow-tls --config $CONFIG_FILE server
-Restart=always
-RestartSec=3
+ExecStart=/usr/local/bin/shadow-tls --v3 server --listen ::0:${listen_port} --server 127.0.0.1:${snell_port} --tls ${tls_domain} --password ${password}
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=shadow-tls
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    # 设置正确的权限
+    chmod 644 "$SERVICE_FILE"
     
-    # 启动服务
+    # 不再需要单独的配置文件
+    rm -f "$CONFIG_DIR/config.json" 2>/dev/null
+    
+    # 创建日志文件
+    touch /var/log/shadowtls.log
+    chmod 644 /var/log/shadowtls.log
+    
+    # 停止可能已存在的服务
+    systemctl stop shadowtls 2>/dev/null
+    
+    # 重新加载服务
     systemctl daemon-reload
-    systemctl enable shadowtls
-    systemctl start shadowtls
+    
+    # 启用并启动服务
+    if ! systemctl enable shadowtls; then
+        echo -e "${RED}启用 ShadowTLS 服务失败${RESET}"
+        return 1
+    fi
+    
+    if ! systemctl start shadowtls; then
+        echo -e "${RED}启动 ShadowTLS 服务失败${RESET}"
+        echo -e "${YELLOW}查看日志内容：${RESET}"
+        tail -n 20 /var/log/shadowtls.log
+        return 1
+    fi
+    
+    # 验证服务状态
+    if ! systemctl is-active shadowtls >/dev/null 2>&1; then
+        echo -e "${RED}ShadowTLS 服务未能正常运行${RESET}"
+        echo -e "${YELLOW}服务状态：${RESET}"
+        systemctl status shadowtls
+        echo -e "${YELLOW}日志内容：${RESET}"
+        tail -n 20 /var/log/shadowtls.log
+        return 1
+    fi
     
     # 清晰地显示配置信息
     echo -e "\n${GREEN}=== ShadowTLS 安装成功 ===${RESET}"
     echo -e "\n${YELLOW}=== 服务器配置 ===${RESET}"
-    echo -e "监听端口：${listen_port}"
-    echo -e "后端 Snell 端口：${snell_port}"
+    echo -e "监听地址：::0:${listen_port}"
+    echo -e "后端地址：127.0.0.1:${snell_port}"
+    echo -e "TLS域名：${tls_domain}"
+    echo -e "密码：${password}"
     
     echo -e "\n${YELLOW}=== Surge/Stash 配置参数 ===${RESET}"
     echo -e "shadow-tls-password=${password}"
@@ -175,8 +207,7 @@ EOF
     echo -e "\n${YELLOW}=== 完整配置示例 ===${RESET}"
     echo -e "Snell = snell, [服务器IP], ${listen_port}, psk=[Snell密码], version=4, shadow-tls-password=${password}, shadow-tls-sni=${tls_domain}, shadow-tls-version=3"
     
-    echo -e "\n${GREEN}配置已保存至：${CONFIG_FILE}${RESET}"
-    echo -e "${GREEN}服务已启动并设置为开机自启${RESET}"
+    echo -e "\n${GREEN}服务已启动并设置为开机自启${RESET}"
 }
 
 # 卸载 ShadowTLS
@@ -197,9 +228,9 @@ uninstall_shadowtls() {
 
 # 查看配置
 view_config() {
-    if [ -f "$CONFIG_FILE" ]; then
+    if [ -f "$SERVICE_FILE" ]; then
         echo -e "${CYAN}ShadowTLS 配置信息：${RESET}"
-        cat "$CONFIG_FILE"
+        cat "$SERVICE_FILE"
         echo -e "\n${CYAN}服务状态：${RESET}"
         systemctl status shadowtls
     else
