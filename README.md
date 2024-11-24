@@ -14,14 +14,20 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 
 ## 功能
 ### 基础功能
-- 简单易用的安装流程
-- 一键卸载
-- 配置查看
-- 版本检查与升级
+- 一键部署Snell
+- 一键卸载Snell
+- 一键输出Snell配置
+- 一件输出Snell + ShadowTLS配置
+- Snell版本检查与升级
+- Snell、ShadowTLS安装、运行状态查看
 
 ### 增强功能
 - ShadowTLS 安装与配置
+   - 一键安装ShadowTLS
+   - 一键卸载ShadowTLS
+   - 支持ShadowTLS配置查看
 - BBR 网络优化
+   - 一键配置bbr
 
 ### 系统功能
 - 脚本更新维护
