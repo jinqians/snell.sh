@@ -12,6 +12,13 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 ## 介绍
 该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案。脚本支持一键部署Snell 和 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
 
+## Surge配置文件
+自用配置文件：https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
+### 配置文件说明
+- Snell V4 配置示例
+- Snell + ShadowTLS 配置示例 
+- VMESS 配置示例
+
 ## 功能
 ### 基础功能
 - 一键部署Snell
