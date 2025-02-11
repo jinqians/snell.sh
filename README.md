@@ -1,6 +1,15 @@
 - [中文](README.md) ｜ [English](README.en.md)
 
 # Snell + ShadowTLS 一键安装脚本
+**以下脚本二选一**
++ 使用脚本前请确认 curl 已安装
+```bash
+bash <(curl -s https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh)
+```
++ 下载运行 
+```bash
+wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
+```
 
 ## 协议简介
 ### Snell 协议
@@ -48,11 +57,6 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 - Debian/Ubuntu 系统
 - Root 或 sudo 权限
 - 内核版本 ≥ 4.9
-
-## 安装
-```bash
-wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
-```
 
 ## 使用方法
 运行脚本后，会显示以下菜单：
