@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.1"
+current_version="2.2"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -265,6 +265,11 @@ EOF
     if [ ! -z "$IPV6_ADDR" ]; then
         echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
     fi
+
+    ln -sf "$(realpath "$0")" /usr/local/bin/snell
+    chmod +x /usr/local/bin/snell
+    
+    echo -e "\n${YELLOW}安装完成！您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
 }
 
 # 卸载 Snell
@@ -291,8 +296,16 @@ uninstall_snell() {
 
     rm /usr/local/bin/snell-server
     rm -rf ${SNELL_CONF_DIR}
-
+    rm -f /usr/local/bin/snell
+    
     echo -e "${GREEN}Snell 卸载成功${RESET}"
+}
+
+# 重启 Snell
+restart_snell() {
+    echo -e "${YELLOW}正在重启 Snell...${RESET}"
+    systemctl restart snell 2>/dev/null || (pkill -x snell-server && nohup snell-server &)
+    echo -e "${GREEN}Snell 已成功重启。${RESET}"
 }
 
 view_snell_config() {
@@ -589,20 +602,21 @@ show_menu() {
     echo -e "${YELLOW}=== 基础功能 ===${RESET}"
     echo -e "${GREEN}1.${RESET} 安装 Snell"
     echo -e "${GREEN}2.${RESET} 卸载 Snell"
-    echo -e "${GREEN}3.${RESET} 查看配置"
+    echo -e "${GREEN}3.${RESET} 重启 Snell"
+    echo -e "${GREEN}4.${RESET} 查看配置"
     
     echo -e "\n${YELLOW}=== 增强功能 ===${RESET}"
-    echo -e "${GREEN}4.${RESET} ShadowTLS 管理"
-    echo -e "${GREEN}5.${RESET} BBR 管理"
+    echo -e "${GREEN}5.${RESET} ShadowTLS 管理"
+    echo -e "${GREEN}6.${RESET} BBR 管理"
     
     echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
-    echo -e "${GREEN}6.${RESET} 检查更新"
-    echo -e "${GREEN}7.${RESET} 更新脚本"
-    echo -e "${GREEN}8.${RESET} 查看服务状态"
+    echo -e "${GREEN}7.${RESET} 检查更新"
+    echo -e "${GREEN}8.${RESET} 更新脚本"
+    echo -e "${GREEN}9.${RESET} 查看服务状态"
     echo -e "${GREEN}0.${RESET} 退出脚本"
     
     echo -e "${CYAN}============================================${RESET}"
-    read -rp "请输入选项 [0-8]: " num
+    read -rp "请输入选项 [0-9]: " num
 }
 
 #开启bbr
@@ -638,21 +652,24 @@ while true; do
             uninstall_snell
             ;;
         3)
-            view_snell_config
+            restart_snell
             ;;
         4)
-            setup_shadowtls
+            view_snell_config
             ;;
         5)
-            setup_bbr
+            setup_shadowtls
             ;;
         6)
-            check_snell_update
+            setup_bbr
             ;;
         7)
-            update_script
+            check_snell_update
             ;;
         8)
+            update_script
+            ;;
+        9)
             check_and_show_status
             read -p "按任意键继续..."
             ;;
@@ -661,7 +678,7 @@ while true; do
             exit 0
             ;;
         *)
-            echo -e "${RED}请输入正确的选项 [0-8]${RESET}"
+            echo -e "${RED}请输入正确的选项 [0-9]${RESET}"
             ;;
     esac
     echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
