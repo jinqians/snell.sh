@@ -4,7 +4,7 @@
 **以下命令二选一**
 + 使用脚本前请确认 curl 已安装
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh)
+bash <(curl -L -s snell.jinqians.com)
 ```
 + 下载运行 
 ```bash
