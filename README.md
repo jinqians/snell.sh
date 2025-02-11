@@ -16,13 +16,14 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 自用配置文件：https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
 ### 配置文件说明
 - Snell V4 配置示例
-- Snell + ShadowTLS 配置示例 
+- Snell + ShadowTLS 配置示例
 - VMESS 配置示例
 
 ## 功能
 ### 基础功能
 - 一键部署Snell
 - 一键卸载Snell
+- 一键重启Snell服务
 - 一键输出Snell配置
 - 一键输出Snell + ShadowTLS配置
 - Snell版本检查与升级
@@ -64,14 +65,15 @@ wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.
 ============= 基础功能 =============
 1) 安装 Snell
 2) 卸载 Snell
-3) 查看配置信息
+3) 重启 Snell
+4) 查看配置信息
 ============= 增强功能 =============
-4) 安装 ShadowTLS
-5) 卸载 ShadowTLS
-6) 安装/配置 BBR
+5) 安装 ShadowTLS
+6) 卸载 ShadowTLS
+7) 安装/配置 BBR
 ============= 系统功能 =============
-7) 检查更新
-8) 更新脚本
+8) 检查更新
+9) 更新脚本
 0) 退出
 请选择操作：
 ```
