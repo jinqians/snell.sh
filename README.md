@@ -1,7 +1,7 @@
 - [中文](README.md) ｜ [English](README.en.md)
 
 # Snell + ShadowTLS 一键安装脚本
-**以下脚本二选一**
+**以下命令二选一**
 + 使用脚本前请确认 curl 已安装
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh)
