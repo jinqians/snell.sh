@@ -1,6 +1,15 @@
 - [English](README.en.md) ｜ [中文](README.md)
 
 # Snell + ShadowTLS One-Click Installation Script
+**Choose one of the following commands.**
++ Make sure curl is installed before using the script
+```bash
+bash <(curl -L -s snell.jinqians.com)
+```
++ Download and run
+```bash
+wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
+```
 
 ## Protocol Introduction
 ### Snell
