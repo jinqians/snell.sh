@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.2"
+current_version="2.3"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -232,10 +232,32 @@ EOF
 
     # 解析配置文件中的信息
     # 获取 IPv4 地址
-    IPV4_ADDR=$(curl -s -4 ip.sb)
+    IPV4_ADDR=$(curl -s4 https://api.ipify.org)
+    if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
+        echo -e "${GREEN}$IPV4_ADDR${NC}"
+    else
+        # 备用IPv4获取方法
+        ipv4=$(curl -s4 https://ip.gs)
+        if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
+            echo -e "${GREEN}$IPV4_ADDR${NC}"
+        else
+            echo -e "${RED}无法获取IPv4地址${NC}"
+        fi
+    fi
     
     # 获取 IPv6 地址
-    IPV6_ADDR=$(curl -s -6 ip.sb)
+    IPV6_ADDR=$(curl -s6 https://api64.ipify.org)
+    if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
+        echo -e "${GREEN}$IPV6_ADDR${NC}"
+    else
+        # 备用IPv6获取方法
+        ipv6=$(curl -s6 https://ip.sb)
+        if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
+            echo -e "${GREEN}$IPV6_ADDR${NC}"
+        else
+            echo -e "${RED}无法获取IPv6地址或服务器不支持IPv6${NC}"
+        fi
+    fi
     
     # 检查是否获取到 IPv4 和 IPv6 地址
     if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
@@ -319,10 +341,32 @@ view_snell_config() {
         echo -e "${CYAN}--------------------------------${RESET}"
         
         # 获取 IPv4 地址
-        IPV4_ADDR=$(curl -s -4 ip.sb)
+        IPV4_ADDR=$(curl -s4 https://api.ipify.org)
+        if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
+            echo -e "${GREEN}$IPV4_ADDR${NC}"
+        else
+            # 备用IPv4获取方法
+            ipv4=$(curl -s4 https://ip.sb)
+            if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
+                echo -e "${GREEN}$IPV4_ADDR${NC}"
+            else
+                echo -e "${RED}无法获取IPv4地址${NC}"
+            fi
+        fi
         
         # 获取 IPv6 地址
-        IPV6_ADDR=$(curl -s -6 ip.sb)
+        IPV6_ADDR=$(curl -s6 https://api64.ipify.org)
+        if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
+            echo -e "${GREEN}$IPV6_ADDR${NC}"
+        else
+            # 备用IPv6获取方法
+            ipv6=$(curl -s6 https://ip.sb)
+            if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
+                echo -e "${GREEN}$IPV6_ADDR${NC}"
+            else
+                echo -e "${RED}无法获取IPv6地址或服务器不支持IPv6${NC}"
+            fi
+        fi
         
         # 检查是否获取到 IPv4 和 IPv6 地址
         if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
