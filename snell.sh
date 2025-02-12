@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.3"
+current_version="2.4"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -78,23 +78,30 @@ get_latest_snell_version() {
 
 # 比较版本号
 version_greater_equal() {
-    # 拆分版本号
-    local ver1="$1"
-    local ver2="$2"
-
-    # 去除 'v' 前缀
-    ver1=${ver1#v}
-    ver2=${ver2#v}
-
-    # 将版本号用 '.' 分割
-    IFS='.' read -r -a ver1_arr <<< "$ver1"
-    IFS='.' read -r -a ver2_arr <<< "$ver2"
-
-    # 比较主版本、次版本和修订版本
+    local ver1=$1
+    local ver2=$2
+    
+    # 移除 'v' 或 'V' 前缀，并转换为小写
+    ver1=$(echo "${ver1#[vV]}" | tr '[:upper:]' '[:lower:]')
+    ver2=$(echo "${ver2#[vV]}" | tr '[:upper:]' '[:lower:]')
+    
+    # 将版本号分割为数组
+    IFS='.' read -ra VER1 <<< "$ver1"
+    IFS='.' read -ra VER2 <<< "$ver2"
+    
+    # 确保数组长度相等
+    while [ ${#VER1[@]} -lt 3 ]; do
+        VER1+=("0")
+    done
+    while [ ${#VER2[@]} -lt 3 ]; do
+        VER2+=("0")
+    done
+    
+    # 比较版本号
     for i in {0..2}; do
-        if (( ver1_arr[i] > ver2_arr[i] )); then
+        if [ "${VER1[i]:-0}" -gt "${VER2[i]:-0}" ]; then
             return 0
-        elif (( ver1_arr[i] < ver2_arr[i] )); then
+        elif [ "${VER1[i]:-0}" -lt "${VER2[i]:-0}" ]; then
             return 1
         fi
     done
@@ -466,37 +473,69 @@ check_snell_update() {
 
 # 获取最新 GitHub 版本
 get_latest_github_version() {
-    GITHUB_VERSION_INFO=$(curl -s https://api.github.com/repos/jinqians/snell.sh/releases/latest)
-    if [ $? -ne 0 ]; then
+    local api_url="https://api.github.com/repos/jinqians/snell.sh/releases/latest"
+    local response
+    
+    response=$(curl -s "$api_url")
+    if [ $? -ne 0 ] || [ -z "$response" ]; then
         echo -e "${RED}无法获取 GitHub 上的最新版本信息。${RESET}"
-        exit 1
+        return 1
     fi
 
-    GITHUB_VERSION=$(echo "$GITHUB_VERSION_INFO" | jq -r '.name' | awk '{print $NF}')
+    GITHUB_VERSION=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
     if [ -z "$GITHUB_VERSION" ]; then
-        echo -e "${RED}获取 GitHub 版本失败。${RESET}"
-        exit 1
+        echo -e "${RED}解析 GitHub 版本信息失败。${RESET}"
+        return 1
     fi
 }
 
 # 更新脚本
 update_script() {
-    get_latest_github_version
-
-    if version_greater_equal "$current_version" "$GITHUB_VERSION"; then
-        echo -e "${GREEN}当前版本 (${current_version}) 已是最新，无需更新。${RESET}"
-    else
-        echo -e "${YELLOW}发现新版本：${GITHUB_VERSION}，当前版本：${current_version}${RESET}"
-        # 使用 curl 下载脚本并覆盖当前脚本
-        curl -s -o "$0" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}脚本更新成功！已更新至 GitHub 上的版本: ${GITHUB_VERSION}${RESET}"
-            echo -e "${YELLOW}请重新执行脚本以应用更新。${RESET}"
-            exec "$0"  # 重新执行当前脚本
-        else
-            echo -e "${RED}脚本更新失败！${RESET}"
-        fi
+    echo -e "${CYAN}正在检查脚本更新...${RESET}"
+    
+    if ! get_latest_github_version; then
+        echo -e "${RED}获取最新版本失败，更新终止。${RESET}"
+        return 1
     fi
+    
+    echo -e "${YELLOW}当前版本：${current_version}${RESET}"
+    echo -e "${YELLOW}最新版本：${GITHUB_VERSION}${RESET}"
+    
+    if version_greater_equal "$current_version" "$GITHUB_VERSION"; then
+        echo -e "${GREEN}当前已是最新版本，无需更新。${RESET}"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}发现新版本，正在更新...${RESET}"
+    
+    # 获取当前脚本的完整路径
+    SCRIPT_PATH=$(readlink -f "$0")
+    
+    # 下载新版本脚本
+    local temp_file="/tmp/snell.sh.new"
+    if ! curl -s -o "$temp_file" "https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh"; then
+        echo -e "${RED}下载新版本失败！${RESET}"
+        rm -f "$temp_file"
+        return 1
+    fi
+    
+    # 检查下载的文件是否完整
+    if [ ! -s "$temp_file" ]; then
+        echo -e "${RED}下载的文件为空！${RESET}"
+        rm -f "$temp_file"
+        return 1
+    fi
+    
+    # 备份当前脚本
+    cp "$SCRIPT_PATH" "${SCRIPT_PATH}.backup"
+    
+    # 替换当前脚本
+    mv "$temp_file" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+    
+    echo -e "${GREEN}脚本更新成功！${RESET}"
+    echo -e "${YELLOW}正在重启脚本...${RESET}"
+    exec "$SCRIPT_PATH"
 }
 
 # 检查服务状态的函数
