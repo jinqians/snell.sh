@@ -146,7 +146,14 @@ open_port() {
     if command -v iptables &> /dev/null; then
         echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
         iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-        iptables-save > /etc/iptables/rules.v4
+        
+        # 创建 iptables 规则保存目录（如果不存在）
+        if [ ! -d "/etc/iptables" ]; then
+            mkdir -p /etc/iptables
+        fi
+        
+        # 尝试保存规则，如果失败则不中断脚本
+        iptables-save > /etc/iptables/rules.v4 || true
     fi
 }
 
@@ -287,11 +294,23 @@ EOF
     fi
 
     # 创建软链接到/usr/local/bin
-    rm -f /usr/local/bin/snell  # 先删除已存在的软链接
-    cp "$(readlink -f "$0")" /usr/local/bin/snell  # 复制脚本到目标位置
-    chmod +x /usr/local/bin/snell  # 确保脚本有执行权限
-    
-    echo -e "\n${YELLOW}安装完成！您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
+    SCRIPT_PATH=$(realpath "$0")
+    if [ -f "$SCRIPT_PATH" ]; then
+        rm -f /usr/local/bin/snell  # 先删除已存在的软链接
+        cp "$SCRIPT_PATH" /usr/local/bin/snell  # 复制脚本到目标位置
+        chmod +x /usr/local/bin/snell  # 确保脚本有执行权限
+        
+        if [ -f "/usr/local/bin/snell" ]; then
+            echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
+            echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
+        else
+            echo -e "\n${RED}管理脚本安装失败，但不影响 Snell 服务运行。${RESET}"
+            echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
+        fi
+    else
+        echo -e "\n${RED}无法获取脚本路径，但不影响 Snell 服务运行。${RESET}"
+        echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
+    fi
 }
 
 # 卸载 Snell
