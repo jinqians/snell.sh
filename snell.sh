@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.5"
+current_version="2.4"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -296,16 +296,45 @@ EOF
     # 创建管理脚本
     echo -e "${CYAN}正在安装管理脚本...${RESET}"
     
-    cat > /usr/local/bin/snell << 'EOF'
+    # 确保目标目录存在
+    mkdir -p /usr/local/bin
+    
+    # 创建管理脚本
+    cat > /usr/local/bin/snell << 'EOFSCRIPT'
 #!/bin/bash
-bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh)
-EOF
+
+# 定义颜色代码
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+# 检查是否以 root 权限运行
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${RED}请以 root 权限运行此脚本${RESET}"
+    exit 1
+fi
+
+# 下载并执行最新版本的脚本
+echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
+TMP_SCRIPT=$(mktemp)
+if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
+    bash "$TMP_SCRIPT"
+    rm -f "$TMP_SCRIPT"
+else
+    echo -e "${RED}下载脚本失败，请检查网络连接。${RESET}"
+    rm -f "$TMP_SCRIPT"
+    exit 1
+fi
+EOFSCRIPT
     
     if [ $? -eq 0 ]; then
         chmod +x /usr/local/bin/snell
         if [ $? -eq 0 ]; then
             echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
-            echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
+            echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}"
+            echo -e "${YELLOW}注意：需要使用 sudo snell 或以 root 身份运行。${RESET}\n"
         else
             echo -e "\n${RED}设置脚本执行权限失败。${RESET}"
             echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
@@ -368,7 +397,7 @@ view_snell_config() {
             echo -e "${GREEN}$IPV4_ADDR${NC}"
         else
             # 备用IPv4获取方法
-            ipv4=$(curl -s4 https://ip.sb)
+            ipv4=$(curl -s4 https://ip.gs)
             if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
                 echo -e "${GREEN}$IPV4_ADDR${NC}"
             else
