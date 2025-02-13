@@ -293,41 +293,25 @@ EOF
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
-    # 创建软链接到/usr/local/bin
-    SCRIPT_PATH=""
+    # 创建管理脚本
+    echo -e "${CYAN}正在安装管理脚本...${RESET}"
     
-    # 尝试多种方法获取脚本路径
-    if [ -n "$BASH_SOURCE" ]; then
-        SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
-    elif [ -n "$0" ]; then
-        SCRIPT_PATH=$(readlink -f "$0")
-    else
-        echo -e "${RED}无法获取脚本路径。${RESET}"
-    fi
+    cat > /usr/local/bin/snell << 'EOF'
+#!/bin/bash
+bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh)
+EOF
     
-    if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-        echo -e "${CYAN}正在安装管理脚本...${RESET}"
-        # 确保目标目录存在
-        mkdir -p /usr/local/bin
-        
-        # 直接复制文件
-        cp "$SCRIPT_PATH" /usr/local/bin/snell
-        
+    if [ $? -eq 0 ]; then
+        chmod +x /usr/local/bin/snell
         if [ $? -eq 0 ]; then
-            chmod +x /usr/local/bin/snell
-            if [ $? -eq 0 ]; then
-                echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
-                echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
-            else
-                echo -e "\n${RED}设置脚本执行权限失败。${RESET}"
-                echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
-            fi
+            echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
+            echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
         else
-            echo -e "\n${RED}复制管理脚本失败。${RESET}"
+            echo -e "\n${RED}设置脚本执行权限失败。${RESET}"
             echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
         fi
     else
-        echo -e "\n${RED}无法获取脚本路径，但不影响 Snell 服务运行。${RESET}"
+        echo -e "\n${RED}创建管理脚本失败。${RESET}"
         echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
     fi
 }
