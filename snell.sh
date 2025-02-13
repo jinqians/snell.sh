@@ -286,17 +286,10 @@ EOF
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
-    echo -e "${GREEN}Snell 安装成功${RESET}"
-    if [ ! -z "$IPV4_ADDR" ]; then
-        echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
-    fi
-    
-    if [ ! -z "$IPV6_ADDR" ]; then
-        echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true"
-    fi
-
-    ln -sf "$(realpath "$0")" /usr/local/bin/snell
-    chmod +x /usr/local/bin/snell
+    # 创建软链接到/usr/local/bin
+    rm -f /usr/local/bin/snell  # 先删除已存在的软链接
+    cp "$(readlink -f "$0")" /usr/local/bin/snell  # 复制脚本到目标位置
+    chmod +x /usr/local/bin/snell  # 确保脚本有执行权限
     
     echo -e "\n${YELLOW}安装完成！您可以在终端输入 'snell' 进入管理菜单。${RESET}\n"
 }
@@ -325,7 +318,7 @@ uninstall_snell() {
 
     rm /usr/local/bin/snell-server
     rm -rf ${SNELL_CONF_DIR}
-    rm -f /usr/local/bin/snell
+    rm -f /usr/local/bin/snell  # 确保删除软链接
     
     echo -e "${GREEN}Snell 卸载成功${RESET}"
 }
