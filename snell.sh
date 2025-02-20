@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.5"
+current_version="2.6"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -244,54 +244,42 @@ EOF
     # 开放端口
     open_port "$PORT"
 
-    # 解析配置文件中的信息
+    # 在安装完成后输出配置信息
+    echo -e "\n${GREEN}安装完成！以下是您的配置信息：${RESET}"
+    echo -e "${CYAN}--------------------------------${RESET}"
+    echo -e "${YELLOW}监听端口: ${PORT}${RESET}"
+    echo -e "${YELLOW}PSK 密钥: ${PSK}${RESET}"
+    echo -e "${YELLOW}IPv6: true${RESET}"
+    echo -e "${YELLOW}DNS 服务器: ${DNS}${RESET}"
+    echo -e "${CYAN}--------------------------------${RESET}"
+
+    # 获取并显示服务器IP地址
+    echo -e "\n${GREEN}服务器地址信息：${RESET}"
+    
     # 获取 IPv4 地址
     IPV4_ADDR=$(curl -s4 https://api.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-        echo -e "${GREEN}$IPV4_ADDR${NC}"
-    else
-        # 备用IPv4获取方法
-        ipv4=$(curl -s4 https://ip.gs)
-        if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-            echo -e "${GREEN}$IPV4_ADDR${NC}"
-        else
-            echo -e "${RED}无法获取IPv4地址${NC}"
-        fi
+        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+        echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
     
     # 获取 IPv6 地址
     IPV6_ADDR=$(curl -s6 https://api64.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-        echo -e "${GREEN}$IPV6_ADDR${NC}"
-    else
-        # 备用IPv6获取方法
-        ipv6=$(curl -s6 https://ip.sb)
-        if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-            echo -e "${GREEN}$IPV6_ADDR${NC}"
-        else
-            echo -e "${RED}无法获取IPv6地址或服务器不支持IPv6${NC}"
-        fi
-    fi
-    
-    # 检查是否获取到 IPv4 和 IPv6 地址
-    if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
-        echo -e "${RED}无法获取到公网 IP 地址，请检查网络连接。${RESET}"
-        return
-    fi
-
-    echo -e "\n公网 IP 地址信息："
-    
-    # 如果有 IPv4 地址
-    if [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
-        echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
-    fi
-
-    # 如果有 IPv6 地址
-    if [ ! -z "$IPV6_ADDR" ]; then
         IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
+
+    # 输出 Surge 配置格式
+    echo -e "\n${GREEN}Surge 配置格式：${RESET}"
+    if [ ! -z "$IPV4_ADDR" ]; then
+        echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+    fi
+    
+    if [ ! -z "$IPV6_ADDR" ]; then
+        echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+    fi
+
 
     # 创建管理脚本
     echo -e "${CYAN}正在安装管理脚本...${RESET}"
