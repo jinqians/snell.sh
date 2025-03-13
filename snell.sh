@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================
 # 作者: jinqians
-# 日期: 2025年2月
+# 日期: 2025年3月
 # 网站：jinqians.com
 # 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理
 # =========================================
@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.6"
+current_version="2.7"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -121,12 +121,27 @@ get_user_port() {
     done
 }
 
+# 获取系统DNS
+get_system_dns() {
+    # 尝试从resolv.conf获取系统DNS
+    if [ -f "/etc/resolv.conf" ]; then
+        system_dns=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
+        if [ ! -z "$system_dns" ]; then
+            echo "$system_dns"
+            return 0
+        fi
+    fi
+    
+    # 如果无法从resolv.conf获取，尝试使用公共DNS
+    echo "1.1.1.1,8.8.8.8"
+}
+
 # 获取用户输入的 DNS 服务器
 get_dns() {
-    read -rp "请输入 DNS 服务器地址 (直接回车使用默认 1.1.1.1,8.8.8.8): " custom_dns
+    read -rp "请输入 DNS 服务器地址 (直接回车使用系统DNS): " custom_dns
     if [ -z "$custom_dns" ]; then
-        DNS="1.1.1.1,8.8.8.8"
-        echo -e "${GREEN}使用默认 DNS 服务器: $DNS${RESET}"
+        DNS=$(get_system_dns)
+        echo -e "${GREEN}使用系统 DNS 服务器: $DNS${RESET}"
     else
         DNS=$custom_dns
         echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
