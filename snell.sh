@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.7"
+current_version="2.8"
 
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
@@ -607,11 +607,11 @@ check_installation() {
 
 # 获取 ShadowTLS 配置
 get_shadowtls_config() {
-    if ! systemctl is-active --quiet shadowtls.service; then
+    if ! systemctl is-active --quiet shadowtls-snell.service; then
         return 1
     fi
     
-    local service_file="/etc/systemd/system/shadowtls.service"
+    local service_file="/etc/systemd/system/shadowtls-snell.service"
     if [ ! -f "$service_file" ]; then
         return 1
     fi
@@ -687,7 +687,7 @@ check_and_show_status() {
     # 检查 ShadowTLS 状态
     if [ -f "/usr/local/bin/shadow-tls" ]; then
         echo -e "${GREEN}ShadowTLS 已安装${RESET}"
-        if systemctl is-active shadowtls &> /dev/null; then
+        if systemctl is-active shadowtls-snell &> /dev/null; then
             echo -e "${GREEN}ShadowTLS 服务运行中${RESET}"
         else
             echo -e "${RED}ShadowTLS 服务未运行${RESET}"
