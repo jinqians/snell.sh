@@ -172,53 +172,67 @@ open_port() {
     fi
 }
 
+# 保存当前配置函数
+backup_config() {
+    if [ -f "${SNELL_CONF_FILE}" ]; then
+        # 从现有配置文件中解析端口、PSK和DNS
+        PORT=$(grep -E '^listen' "${SNELL_CONF_FILE}" | sed -n 's/.*::0:\([0-9]*\)/\1/p')
+        PSK=$(grep -E '^psk' "${SNELL_CONF_FILE}" | awk -F'=' '{print $2}' | tr -d ' ')
+        DNS=$(grep -E '^dns' "${SNELL_CONF_FILE}" | awk -F'=' '{print $2}' | tr -d ' ')
+        # 将配置存储到备份文件
+        cat > /etc/snell/snell.config.bak <<EOF
+PORT=${PORT}
+PSK=${PSK}
+DNS=${DNS}
+EOF
+    fi
+}
+
 # 安装 Snell
 install_snell() {
-    echo -e "${CYAN}正在安装 Snell${RESET}"
-
-    wait_for_apt
-    apt update && apt install -y wget unzip
-
+    echo -e "${CYAN}正在安装/更新 Snell${RESET}"
+    wait_for_apt apt update && apt install -y wget unzip
     get_latest_snell_version
     ARCH=$(uname -m)
-    SNELL_URL=""
-    
     if [[ ${ARCH} == "aarch64" ]]; then
         SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
     else
         SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
     fi
-
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载 Snell 失败。${RESET}"
         exit 1
     fi
-
     unzip -o snell-server.zip -d ${INSTALL_DIR}
     if [ $? -ne 0 ]; then
         echo -e "${RED}解压缩 Snell 失败。${RESET}"
         exit 1
     fi
-
     rm snell-server.zip
     chmod +x ${INSTALL_DIR}/snell-server
 
-    get_user_port  # 获取用户输入的端口
-    get_dns # 获取用户输入的 DNS 服务器
-    PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
-
-    mkdir -p ${SNELL_CONF_DIR}
-
-    cat > ${SNELL_CONF_FILE} << EOF
+    # 如果配置文件已存在，先备份配置
+    if [ -f "${SNELL_CONF_FILE}" ]; then
+        echo -e "${YELLOW}检测到已存在的配置文件，先备份现有配置。${RESET}"
+        backup_config
+    else
+        # 没有配置则正常引导用户输入
+        get_user_port
+        get_dns
+        PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
+        mkdir -p "${SNELL_CONF_DIR}"
+        cat > ${SNELL_CONF_FILE} <<EOF
 [snell-server]
 listen = ::0:${PORT}
 psk = ${PSK}
 ipv6 = true
 dns = ${DNS}
 EOF
+    fi
 
-    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+    # 更新 systemd 服务文件
+    cat > ${SYSTEMD_SERVICE_FILE} <<EOF
 [Unit]
 Description=Snell Proxy Service
 After=network.target
