@@ -1,9 +1,10 @@
 - [中文](README.md) ｜ [English](README.en.md)
 
 # Snell + ShadowTLS 一键安装脚本
-* 请确保已安装curl/wget *
-** 根据需要选择 **
-+ 多功能管理菜单
+*请确保已安装curl/wget*
+
+**以下脚本根据需要选择**
++ snell | ss 2022 | shadowtls 多功能管理菜单
 ```bash
 bash <(curl -L -s menu.jinqians.com)
 ```
