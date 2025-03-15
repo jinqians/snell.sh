@@ -4,6 +4,9 @@
 *请确保已安装curl/wget*
 
 **以下脚本根据需要选择**
+
+不需要shadowtls选择第二个即可，后续会对snell.sh进行精简
+
 + snell | ss 2022 | shadowtls 多功能管理菜单
 ```bash
 bash <(curl -L -s menu.jinqians.com)
