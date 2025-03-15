@@ -14,7 +14,22 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 # 当前版本号
-current_version="1.0"
+current_version="2.0"
+
+# 安装全局命令
+install_global_command() {
+    # 获取脚本的绝对路径
+    SCRIPT_PATH=$(readlink -f "$0")
+    
+    # 检查是否已经安装了全局命令
+    if [ ! -f "/usr/local/bin/menu" ]; then
+        echo -e "${CYAN}正在安装全局命令...${RESET}"
+        # 创建软链接到 /usr/local/bin
+        ln -s "$SCRIPT_PATH" /usr/local/bin/menu
+        chmod +x /usr/local/bin/menu
+        echo -e "${GREEN}安装成功！现在您可以在任何位置使用 'menu' 命令来启动管理脚本${RESET}"
+    fi
+}
 
 # 检查并安装依赖
 check_dependencies() {
@@ -391,6 +406,7 @@ show_menu() {
 # 初始检查
 check_root
 check_dependencies
+install_global_command
 
 # 主循环
 while true; do
