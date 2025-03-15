@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================
 # 作者: jinqians
-# 日期: 2025年3月
+# 日期: 2025年2月
 # 网站：jinqians.com
 # 描述: 这个脚本用于统一管理 Snell、SS-Rust 和 ShadowTLS
 # =========================================
@@ -18,17 +18,19 @@ current_version="2.0"
 
 # 安装全局命令
 install_global_command() {
-    # 获取脚本的绝对路径
-    SCRIPT_PATH=$(readlink -f "$0")
+    echo -e "${CYAN}正在安装全局命令...${RESET}"
     
-    # 检查是否已经安装了全局命令
-    if [ ! -f "/usr/local/bin/menu" ]; then
-        echo -e "${CYAN}正在安装全局命令...${RESET}"
-        # 创建软链接到 /usr/local/bin
-        ln -s "$SCRIPT_PATH" /usr/local/bin/menu
-        chmod +x /usr/local/bin/menu
-        echo -e "${GREEN}安装成功！现在您可以在任何位置使用 'menu' 命令来启动管理脚本${RESET}"
+    # 下载脚本到 /usr/local/bin
+    curl -L -s menu.jinqians.com -o "/usr/local/bin/menu.sh"
+    chmod +x "/usr/local/bin/menu.sh"
+    
+    # 创建软链接
+    if [ -f "/usr/local/bin/menu" ]; then
+        rm -f "/usr/local/bin/menu"
     fi
+    ln -s "/usr/local/bin/menu.sh" "/usr/local/bin/menu"
+    
+    echo -e "${GREEN}安装成功！现在您可以在任何位置使用 'menu' 命令来启动管理脚本${RESET}"
 }
 
 # 检查并安装依赖
@@ -286,7 +288,7 @@ manage_snell() {
 
 # 安装/管理 SS-2022
 manage_ss_rust() {
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022/main/ss-2022.sh)
 }
 
 # 安装/管理 ShadowTLS
@@ -399,6 +401,10 @@ show_menu() {
     echo -e "${GREEN}8.${RESET} 流量管理(请勿使用，功能不完善)"
     echo -e "${GREEN}0.${RESET} 退出"
     
+    echo -e "${CYAN}============================================${RESET}"
+
+    echo -e "${GREEN}退出脚本后，输入menu可进入脚本{RESET}"
+
     echo -e "${CYAN}============================================${RESET}"
     read -rp "请输入选项 [0-8]: " num
 }
