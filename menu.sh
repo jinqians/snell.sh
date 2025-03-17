@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 # 当前版本号
-current_version="2.0"
+current_version="3.0"
 
 # 安装全局命令
 install_global_command() {
@@ -288,7 +288,7 @@ manage_snell() {
 
 # 安装/管理 SS-2022
 manage_ss_rust() {
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022/main/ss-2022.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022.sh)
 }
 
 # 安装/管理 ShadowTLS
