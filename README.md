@@ -8,7 +8,7 @@
 
 **以下脚本根据需要选择**
 
-不需要shadowtls选择第二个即可，后续会对snell.sh进行精简
+该脚本可进行snell v4的安装，也可安装snell v4 + shadowtls v3
 
 + snell | ss 2022 | shadowtls 多功能管理菜单
 ```bash
@@ -31,7 +31,7 @@ Snell 协议是由 Surge 团队设计的一种轻量级、高效的加密代理�
 ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹检测。它通过模拟正常的 HTTPS 流量，提供更好的隐私保护和连接稳定性。
 
 ## 介绍
-该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案。脚本支持一键部署Snell 和 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
+该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案。脚本支持一键部署Snell 或 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
 
 ## Surge配置文件
 自用配置文件：https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
@@ -39,6 +39,7 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 - Snell V4 配置示例
 - Snell + ShadowTLS 配置示例
 - VMESS 配置示例
+- surge 订阅示例
 
 ## 功能
 ### 基础功能
@@ -88,7 +89,7 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 6) 卸载 ShadowTLS
 7) 安装/配置 BBR
 ============= 系统功能 =============
-8) 检查更新
+8) 更新snell
 9) 更新脚本
 0) 退出
 请选择操作：
