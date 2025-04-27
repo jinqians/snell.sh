@@ -14,7 +14,27 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="3.0"
+current_version="3.1"
+
+# === 新增：备份和还原配置函数 ===
+# 备份 Snell 配置
+backup_snell_config() {
+    local backup_dir="/etc/snell/backup_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+    cp -a /etc/snell/users/*.conf "$backup_dir"/ 2>/dev/null
+    echo "$backup_dir"
+}
+
+# 恢复 Snell 配置
+restore_snell_config() {
+    local backup_dir="$1"
+    if [ -d "$backup_dir" ]; then
+        cp -a "$backup_dir"/*.conf /etc/snell/users/
+        echo -e "${GREEN}配置已从备份恢复。${RESET}"
+    else
+        echo -e "${RED}未找到备份目录，无法恢复配置。${RESET}"
+    fi
+}
 
 # 检查 bc 是否安装
 check_bc() {
@@ -488,6 +508,60 @@ EOFSCRIPT
     fi
 }
 
+# 只更新 Snell 二进制文件，不覆盖配置
+update_snell_binary() {
+    echo -e "${CYAN}正在备份当前配置...${RESET}"
+    local backup_dir
+    backup_dir=$(backup_snell_config)
+    echo -e "${GREEN}配置已备份到: $backup_dir${RESET}"
+
+    echo -e "${CYAN}正在更新 Snell 二进制文件...${RESET}"
+    get_latest_snell_version
+    ARCH=$(uname -m)
+    SNELL_URL=""
+    if [[ ${ARCH} == "aarch64" ]]; then
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+    else
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+    fi
+    wget ${SNELL_URL} -O snell-server.zip
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}下载 Snell 失败。${RESET}"
+        restore_snell_config "$backup_dir"
+        exit 1
+    fi
+    unzip -o snell-server.zip -d ${INSTALL_DIR}
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}解压缩 Snell 失败。${RESET}"
+        restore_snell_config "$backup_dir"
+        exit 1
+    fi
+    rm snell-server.zip
+    chmod +x ${INSTALL_DIR}/snell-server
+
+    # 重启主服务
+    systemctl restart snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}主服务重启失败，尝试恢复配置...${RESET}"
+        restore_snell_config "$backup_dir"
+        systemctl restart snell
+    fi
+
+    # 重启所有多用户服务
+    if [ -d "${SNELL_CONF_DIR}/users" ]; then
+        for user_conf in "${SNELL_CONF_DIR}/users"/*; do
+            if [ -f "$user_conf" ] && [[ "$user_conf" != *"snell-main.conf" ]]; then
+                local port=$(grep -E '^listen' "$user_conf" | sed -n 's/.*::0:\([0-9]*\)/\1/p')
+                if [ ! -z "$port" ]; then
+                    systemctl restart "snell-${port}" 2>/dev/null
+                fi
+            fi
+        done
+    fi
+    echo -e "${GREEN}Snell 已更新并重启，原有配置已保留。${RESET}"
+    echo -e "${YELLOW}配置备份目录: $backup_dir${RESET}"
+}
+
 # 卸载 Snell
 uninstall_snell() {
     echo -e "${CYAN}正在卸载 Snell${RESET}"
@@ -817,7 +891,7 @@ check_snell_update() {
         echo -e "${CYAN}是否更新 Snell? [y/N]${RESET}"
         read -r choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            install_snell
+            update_snell_binary
         else
             echo -e "${CYAN}已取消更新。${RESET}"
         fi
@@ -1001,7 +1075,7 @@ show_menu() {
     echo -e "${GREEN}7.${RESET} 多用户管理"
     
     echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
-    echo -e "${GREEN}8.${RESET} 检查更新"
+    echo -e "${GREEN}8.${RESET} 更新Snell"
     echo -e "${GREEN}9.${RESET} 更新脚本"
     echo -e "${GREEN}10.${RESET} 查看服务状态"
     echo -e "${GREEN}0.${RESET} 退出脚本"
