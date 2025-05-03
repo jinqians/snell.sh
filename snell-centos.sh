@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================
 # 作者: jinqians
-# 日期: 2025年5月
+# 日期: 2025年2月
 # 网站：jinqians.com
 # 描述: 这个脚本用于在 CentOS/Red Hat/Fedora 系统上安装和管理 Snell 代理
 # =========================================
@@ -15,7 +15,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.0"
+current_version="3.1"
 
 # 定义系统路径
 INSTALL_DIR="/usr/local/bin"
@@ -174,7 +174,7 @@ install_snell() {
 
     # 创建软链接
     if [ ! -f "/usr/bin/snell" ]; then
-        ln -s "$(pwd)/snell-centos.sh" /usr/bin/snell
+        ln -s "${INSTALL_DIR}/snell-centos.sh" /usr/bin/snell
         chmod +x /usr/bin/snell
         echo -e "${GREEN}已创建 snell 命令软链接${RESET}"
     fi
@@ -620,4 +620,49 @@ while true; do
     esac
     echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
     read -n 1 -s -r
-done 
+done
+
+# 创建管理脚本
+cat > /usr/local/bin/snell << 'EOFSCRIPT'
+#!/bin/bash
+
+# 定义颜色代码
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+# 检查是否以 root 权限运行
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${RED}请以 root 权限运行此脚本${RESET}"
+    exit 1
+fi
+
+# 下载并执行最新版本的脚本
+echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
+TMP_SCRIPT=$(mktemp)
+if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/snell-centos.sh -o "$TMP_SCRIPT"; then
+    bash "$TMP_SCRIPT"
+    rm -f "$TMP_SCRIPT"
+else
+    echo -e "${RED}下载脚本失败，请检查网络连接。${RESET}"
+    rm -f "$TMP_SCRIPT"
+    exit 1
+fi
+EOFSCRIPT
+    
+if [ $? -eq 0 ]; then
+    chmod +x /usr/local/bin/snell
+    if [ $? -eq 0 ]; then
+        echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
+        echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}"
+        echo -e "${YELLOW}注意：需要使用 sudo snell 或以 root 身份运行。${RESET}\n"
+    else
+        echo -e "\n${RED}设置脚本执行权限失败。${RESET}"
+        echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
+    fi
+else
+    echo -e "\n${RED}创建管理脚本失败。${RESET}"
+    echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
+fi 
