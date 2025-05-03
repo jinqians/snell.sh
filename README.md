@@ -23,8 +23,13 @@ bash <(curl -L -s snell.jinqians.com)
 wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
 ```
 # Centos Snell 一键安装脚本
++ snell安装脚本
 ```bash
-bash <(curl -L -s https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/snell-centos.sh)
+bash <(curl -L -s snell-centos.jinqians.com)
+```
++ 下载脚本至本地执行
+```bash
+wget https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/snell-centos.sh -O snell-centos.sh && chmod +x snell-centos.sh && ./snell-centos.sh
 ```
 
 ## 协议简介
