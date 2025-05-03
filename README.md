@@ -1,9 +1,9 @@
 - [中文](README.md) ｜ [English](README.en.md)
 
-# 手搓教程
+## 手搓教程
 [点击跳转](https://vps.jinqians.com/snell-v4%e9%83%a8%e7%bd%b2%e6%95%99%e7%a8%8b/)
 
-# Snell + ShadowTLS 一键安装脚本
+# Debian / Ubuntu Snell + ShadowTLS 一键安装脚本
 *请确保已安装curl/wget*
 
 **以下脚本根据需要选择**
@@ -21,6 +21,10 @@ bash <(curl -L -s snell.jinqians.com)
 + 下载脚本至本地执行 
 ```bash
 wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
+```
+# Centos Snell 一键安装脚本
+```bash
+bash <(curl -L -s https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/snell-centos.sh)
 ```
 
 ## 协议简介
