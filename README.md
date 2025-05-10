@@ -23,6 +23,7 @@ bash <(curl -L -s snell.jinqians.com)
 wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
 ```
 # Centos Snell 一键安装脚本
+**senll-entos仅支持snell，暂不支持snell + shadowtls**
 + snell安装脚本
 ```bash
 bash <(curl -L -s snell-centos.jinqians.com)
