@@ -57,6 +57,9 @@ Snell is a lightweight and efficient encrypted proxy protocol designed by the Su
 
 ShadowTLS is a lightweight TLS camouflage tool that effectively evades TLS fingerprint detection. By simulating normal HTTPS traffic, it offers improved privacy and connection stability.
 
+## Thanks for sponsoring
+[ZMTO](https://console.zmto.com/?affid=1567)
+
 ## Overview
 
 This management script provides an efficient and automated solution for deploying Snell and ShadowTLS proxy services on Linux systems. It supports one-click deployment of Snell or Snell + ShadowTLS, and offers easy commands for installation, configuration, version control, and uninstallation, helping users quickly set up secure and reliable proxy services.
