@@ -435,12 +435,38 @@ User=root
 Group=root
 Environment=RUST_BACKTRACE=1
 Environment=RUST_LOG=info
-ExecStart=/usr/local/bin/shadow-tls --v3 server --listen ::0:${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}
+ExecStart=/usr/local/bin/shadow-tls --v3 server -s ::0:${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}
 StandardOutput=append:/var/log/shadowtls-${identifier}.log
 StandardError=append:/var/log/shadowtls-${identifier}.log
 SyslogIdentifier=${identifier}
 Restart=always
 RestartSec=3
+
+# 性能优化参数
+LimitNOFILE=65535
+CPUAffinity=0
+Nice=0
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+MemoryLimit=512M
+CPUQuota=50%
+LimitCORE=infinity
+LimitRSS=infinity
+LimitNPROC=65535
+LimitAS=infinity
+SystemCallFilter=@system-service
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# 系统优化参数
+Environment=RUST_THREADS=1
+Environment=RUST_LOG_LEVEL=info
+Environment=RUST_LOG_TARGET=journal
+Environment=RUST_LOG_FORMAT=json
+Environment=RUST_LOG_FILTER=info,shadow_tls=info
 
 [Install]
 WantedBy=multi-user.target
