@@ -435,7 +435,7 @@ User=root
 Group=root
 Environment=RUST_BACKTRACE=1
 Environment=RUST_LOG=info
-ExecStart=/usr/local/bin/shadow-tls --v3 server -s ::0:${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}
+ExecStart=/usr/local/bin/shadow-tls --v3 listen -s ::0:${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}
 StandardOutput=append:/var/log/shadowtls-${identifier}.log
 StandardError=append:/var/log/shadowtls-${identifier}.log
 SyslogIdentifier=${identifier}
