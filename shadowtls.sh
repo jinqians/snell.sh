@@ -463,6 +463,7 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 # 系统优化参数
 Environment=RUST_THREADS=1
+Environment=MONOIO_FORCE_LEGACY_DRIVER=1
 Environment=RUST_LOG_LEVEL=info
 Environment=RUST_LOG_TARGET=journal
 Environment=RUST_LOG_FORMAT=json
