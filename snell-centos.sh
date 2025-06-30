@@ -15,7 +15,11 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="1.1"
+current_version="2.0"
+
+# 全局变量：选择的 Snell 版本
+SNELL_VERSION_CHOICE=""
+SNELL_VERSION=""
 
 # 定义系统路径
 INSTALL_DIR="/usr/local/bin"
@@ -49,14 +53,145 @@ install_dependencies() {
     yum -y install curl wget unzip net-tools systemd
 }
 
-# 获取 Snell 最新版本
-get_latest_snell_version() {
+# === 新增：版本选择函数 ===
+# 选择 Snell 版本
+select_snell_version() {
+    echo -e "${CYAN}请选择要安装的 Snell 版本：${RESET}"
+    echo -e "${GREEN}1.${RESET} Snell v4 (稳定版)"
+    echo -e "${GREEN}2.${RESET} Snell v5 (测试版)"
+    echo -e "${YELLOW}注意：v5 为测试版本，可能存在兼容性问题${RESET}"
+    
+    while true; do
+        read -rp "请输入选项 [1-2]: " version_choice
+        case "$version_choice" in
+            1)
+                SNELL_VERSION_CHOICE="v4"
+                echo -e "${GREEN}已选择 Snell v4${RESET}"
+                break
+                ;;
+            2)
+                SNELL_VERSION_CHOICE="v5"
+                echo -e "${GREEN}已选择 Snell v5${RESET}"
+                break
+                ;;
+            *)
+                echo -e "${RED}请输入正确的选项 [1-2]${RESET}"
+                ;;
+        esac
+    done
+}
+
+# 获取 Snell v4 最新版本
+get_latest_snell_v4_version() {
     latest_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
     if [ -n "$latest_version" ]; then
-        SNELL_VERSION="v${latest_version}"
+        echo "v${latest_version}"
     else
-        SNELL_VERSION="v4.0.1"
-        echo -e "${RED}获取 Snell 最新版本失败，使用默认版本 ${SNELL_VERSION}${RESET}"
+        # 如果无法获取，使用默认版本，但不输出错误信息到返回值
+        echo "v4.1.1"
+    fi
+}
+
+# 获取 Snell v5 最新版本
+get_latest_snell_v5_version() {
+    # 根据官方文档，v5 目前只有测试版本 v5.0.0b1
+    # 未来如果有新版本，可以尝试从官方页面获取
+    local v5_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | head -n 1)
+    if [ -n "$v5_version" ]; then
+        echo "v${v5_version}"
+    else
+        # 如果无法获取，使用官方文档中的测试版本
+        echo "v5.0.0b1"
+    fi
+}
+
+# 获取 Snell 最新版本（根据选择的版本）
+get_latest_snell_version() {
+    if [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
+        SNELL_VERSION=$(get_latest_snell_v5_version)
+    else
+        SNELL_VERSION=$(get_latest_snell_v4_version)
+    fi
+}
+
+# 获取 Snell 下载 URL
+get_snell_download_url() {
+    local version=$1
+    local arch=$(uname -m)
+    
+    if [ "$version" = "v5" ]; then
+        # v5 版本使用 zip 格式，目前只有测试版本
+        case ${arch} in
+            "x86_64"|"amd64")
+                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-amd64.zip"
+                ;;
+            "i386"|"i686")
+                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-i386.zip"
+                ;;
+            "aarch64"|"arm64")
+                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-aarch64.zip"
+                ;;
+            "armv7l"|"armv7")
+                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-armv7l.zip"
+                ;;
+            *)
+                echo -e "${RED}不支持的架构: ${arch}${RESET}"
+                exit 1
+                ;;
+        esac
+    else
+        # v4 版本使用 zip 格式
+        case ${arch} in
+            "x86_64"|"amd64")
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+                ;;
+            "i386"|"i686")
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
+                ;;
+            "aarch64"|"arm64")
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+                ;;
+            "armv7l"|"armv7")
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
+                ;;
+            *)
+                echo -e "${RED}不支持的架构: ${arch}${RESET}"
+                exit 1
+                ;;
+        esac
+    fi
+}
+
+# 生成 Surge 配置格式
+generate_surge_config() {
+    local ip_addr=$1
+    local port=$2
+    local psk=$3
+    local version=$4
+    local country=$5
+    
+    if [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
+        # v5 版本输出 v4 和 v5 两种配置
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
+    else
+        # v4 版本只输出 v4 配置
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+    fi
+}
+
+# 检测当前安装的 Snell 版本
+detect_installed_snell_version() {
+    if command -v snell-server &> /dev/null; then
+        # 尝试获取版本信息
+        local version_output=$(snell-server --v 2>&1)
+        if echo "$version_output" | grep -q "v5"; then
+            echo "v5"
+        else
+            echo "v4"
+        fi
+    else
+        echo "unknown"
     fi
 }
 
@@ -135,6 +270,9 @@ install_snell() {
     check_root
     check_system
 
+    # 选择 Snell 版本
+    select_snell_version
+
     # 安装依赖
     install_dependencies
 
@@ -143,14 +281,10 @@ install_snell() {
     ARCH=$(uname -m)
     
     # 确定下载链接
-    if [[ "$ARCH" == "x86_64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-    elif [[ "$ARCH" == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-    else
-        echo -e "${RED}错误: 不支持的系统架构: $ARCH${RESET}"
-        exit 1
-    fi
+    SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
+
+    echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
+    echo -e "${YELLOW}下载链接: ${SNELL_URL}${RESET}"
 
     # 创建安装目录
     mkdir -p ${INSTALL_DIR}
@@ -159,7 +293,7 @@ install_snell() {
     # 下载并解压
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
-        echo -e "${RED}下载 Snell 失败。${RESET}"
+        echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
         exit 1
     fi
 
@@ -309,6 +443,12 @@ show_information() {
     echo -e "${GREEN}Snell 安装成功!${RESET}"
     echo -e "${BLUE}============================================${RESET}"
     
+    # 检测当前安装的 Snell 版本
+    local installed_version=$(detect_installed_snell_version)
+    if [ "$installed_version" != "unknown" ]; then
+        echo -e "${YELLOW}当前安装版本: Snell ${installed_version}${RESET}"
+    fi
+    
     # 读取配置文件
     if [ -f "${SNELL_CONF_FILE}" ]; then
         # 直接从配置文件读取信息
@@ -339,10 +479,10 @@ show_information() {
     # 显示 Surge 配置格式
     echo -e "\n${GREEN}Surge 配置格式:${RESET}"
     if [ ! -z "$IPV4_ADDR" ]; then
-        echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+        generate_surge_config "$IPV4_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV4"
     fi
     if [ ! -z "$IPV6_ADDR" ]; then
-        echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk = ${PSK}, version = 4, reuse = true, tfo = true${RESET}"
+        generate_surge_config "$IPV6_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV6"
     fi
     
     echo -e "\n${GREEN}使用以下命令管理服务:${RESET}"
@@ -426,27 +566,23 @@ check_and_show_status() {
     echo -e "${CYAN}============================================${RESET}\n"
 }
 
+# === 新增：备份和还原配置函数 ===
 # 备份 Snell 配置
 backup_snell_config() {
-    local backup_dir="/tmp/snell_backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="/etc/snell/backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
-    cp -r "${SNELL_CONF_DIR}" "$backup_dir/"
-    cp "${INSTALL_DIR}/snell-server" "$backup_dir/"
+    cp -a /etc/snell/users/*.conf "$backup_dir"/ 2>/dev/null
     echo "$backup_dir"
 }
 
 # 恢复 Snell 配置
 restore_snell_config() {
-    local backup_dir=$1
+    local backup_dir="$1"
     if [ -d "$backup_dir" ]; then
-        rm -rf "${SNELL_CONF_DIR}"
-        rm -f "${INSTALL_DIR}/snell-server"
-        cp -r "$backup_dir/snell" "${SNELL_CONF_DIR%/*}/"
-        cp "$backup_dir/snell-server" "${INSTALL_DIR}/"
-        chmod +x "${INSTALL_DIR}/snell-server"
-        return 0
+        cp -a "$backup_dir"/*.conf /etc/snell/users/
+        echo -e "${GREEN}配置已从备份恢复。${RESET}"
     else
-        return 1
+        echo -e "${RED}未找到备份目录，无法恢复配置。${RESET}"
     fi
 }
 
@@ -467,6 +603,9 @@ get_current_snell_version() {
 # 检查 Snell 更新
 check_snell_update() {
     echo -e "\n${CYAN}=============== 检查 Snell 更新 ===============${RESET}"
+    
+    # 选择要检查更新的 Snell 版本
+    select_snell_version
     
     # 获取版本信息
     get_latest_snell_version
@@ -490,22 +629,16 @@ check_snell_update() {
             backup_dir=$(backup_snell_config)
             echo -e "${GREEN}配置已备份到: $backup_dir${RESET}"
 
+            echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
+            echo -e "${YELLOW}下载链接: ${SNELL_URL}${RESET}"
+
             # 下载新版本
-            ARCH=$(uname -m)
-            if [[ "$ARCH" == "x86_64" ]]; then
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-            elif [[ "$ARCH" == "aarch64" ]]; then
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-            else
-                echo -e "${RED}错误: 不支持的系统架构: $ARCH${RESET}"
-                restore_snell_config "$backup_dir"
-                return 1
-            fi
+            SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
 
             # 下载并解压
             wget ${SNELL_URL} -O snell-server.zip
             if [ $? -ne 0 ]; then
-                echo -e "${RED}下载 Snell 失败${RESET}"
+                echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败${RESET}"
                 restore_snell_config "$backup_dir"
                 return 1
             fi
