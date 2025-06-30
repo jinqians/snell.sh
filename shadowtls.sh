@@ -157,12 +157,16 @@ get_snell_version() {
     if ! command -v snell-server &> /dev/null; then
         return 1
     fi
-    local version=$(snell-server --version 2>&1 | grep -oP 'v\K\d+')
-    if [ -z "$version" ]; then
-        # 如果无法获取版本，则默认为 4
-        echo "4"
+    
+    # 尝试获取版本信息
+    local version_output=$(snell-server --v 2>&1)
+    
+    # 检查是否为 v5 版本
+    if echo "$version_output" | grep -q "v5"; then
+        echo "5"
     else
-        echo "$version"
+        # 默认为 v4 版本
+        echo "4"
     fi
 }
 
@@ -398,7 +402,16 @@ generate_snell_links() {
     echo -e "  - 版本：3"
     
     echo -e "\n${YELLOW}=== Surge 配置 ===${RESET}"
-    echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = ${snell_version}, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
+    
+    # 根据 Snell 版本生成不同的配置
+    if [ "$snell_version" = "5" ]; then
+        # v5 版本输出 v4 和 v5 两种配置
+        echo -e "Snell v4 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
+        echo -e "Snell v5 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
+    else
+        # v4 版本只输出 v4 配置
+        echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
+    fi
 }
 
 # 创建服务文件的模板
