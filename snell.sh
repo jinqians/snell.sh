@@ -647,6 +647,13 @@ EOFSCRIPT
 
 # 只更新 Snell 二进制文件，不覆盖配置
 update_snell_binary() {
+    echo -e "${CYAN}=============== Snell 更新 ===============${RESET}"
+    echo -e "${YELLOW}注意：这是更新操作，不是重新安装${RESET}"
+    echo -e "${GREEN}✓ 所有现有配置将被保留${RESET}"
+    echo -e "${GREEN}✓ 端口、密码、用户配置都不会改变${RESET}"
+    echo -e "${GREEN}✓ 服务会自动重启${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+    
     echo -e "${CYAN}正在备份当前配置...${RESET}"
     local backup_dir
     backup_dir=$(backup_snell_config)
@@ -671,6 +678,7 @@ update_snell_binary() {
         exit 1
     fi
 
+    echo -e "${CYAN}正在替换 Snell 二进制文件...${RESET}"
     unzip -o snell-server.zip -d ${INSTALL_DIR}
     if [ $? -ne 0 ]; then
         echo -e "${RED}解压缩 Snell 失败。${RESET}"
@@ -681,6 +689,7 @@ update_snell_binary() {
     rm snell-server.zip
     chmod +x ${INSTALL_DIR}/snell-server
 
+    echo -e "${CYAN}正在重启 Snell 服务...${RESET}"
     # 重启主服务
     systemctl restart snell
     if [ $? -ne 0 ]; then
@@ -700,8 +709,14 @@ update_snell_binary() {
             fi
         done
     fi
-    echo -e "${GREEN}Snell 已更新并重启，原有配置已保留。${RESET}"
+    
+    echo -e "${CYAN}============================================${RESET}"
+    echo -e "${GREEN}✅ Snell 更新完成！${RESET}"
+    echo -e "${GREEN}✓ 版本已更新到: ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})${RESET}"
+    echo -e "${GREEN}✓ 所有配置已保留${RESET}"
+    echo -e "${GREEN}✓ 服务已重启${RESET}"
     echo -e "${YELLOW}配置备份目录: $backup_dir${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
 }
 
 # 卸载 Snell
@@ -1018,23 +1033,86 @@ view_snell_config() {
 
 # 获取当前安装的 Snell 版本
 get_current_snell_version() {
-    CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+')
-    if [ -z "$CURRENT_VERSION" ]; then
-        echo -e "${RED}无法获取当前 Snell 版本。${RESET}"
-        exit 1
+    # 检测当前安装的 Snell 版本
+    local current_installed_version=$(detect_installed_snell_version)
+    
+    if [ "$current_installed_version" = "v5" ]; then
+        # v5 版本获取完整版本号
+        CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+[a-z0-9]*')
+        if [ -z "$CURRENT_VERSION" ]; then
+            # 如果无法获取，使用默认的 v5 版本
+            CURRENT_VERSION="v5.0.0b1"
+        fi
+    else
+        # v4 版本获取完整版本号
+        CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+')
+        if [ -z "$CURRENT_VERSION" ]; then
+            echo -e "${RED}无法获取当前 Snell 版本。${RESET}"
+            exit 1
+        fi
     fi
 }
 
 # 检查 Snell 更新
 check_snell_update() {
-    # 选择要检查更新的 Snell 版本
-    select_snell_version
+    echo -e "\n${CYAN}=============== 检查 Snell 更新 ===============${RESET}"
+    
+    # 检测当前安装的 Snell 版本
+    local current_installed_version=$(detect_installed_snell_version)
+    if [ "$current_installed_version" = "unknown" ]; then
+        echo -e "${RED}无法检测当前 Snell 版本${RESET}"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}当前安装版本: Snell ${current_installed_version}${RESET}"
+    
+    # 如果当前是 v4 版本，询问是否要升级到 v5
+    if [ "$current_installed_version" = "v4" ]; then
+        echo -e "\n${CYAN}检测到您当前使用的是 Snell v4，是否要升级到 v5？${RESET}"
+        echo -e "${YELLOW}注意：v5 为测试版本，可能存在兼容性问题${RESET}"
+        echo -e "${GREEN}1.${RESET} 升级到 Snell v5"
+        echo -e "${GREEN}2.${RESET} 继续使用 Snell v4（检查 v4 更新）"
+        echo -e "${GREEN}3.${RESET} 取消更新"
+        
+        while true; do
+            read -rp "请选择 [1-3]: " upgrade_choice
+            case "$upgrade_choice" in
+                1)
+                    SNELL_VERSION_CHOICE="v5"
+                    echo -e "${GREEN}已选择升级到 Snell v5${RESET}"
+                    break
+                    ;;
+                2)
+                    SNELL_VERSION_CHOICE="v4"
+                    echo -e "${GREEN}已选择继续使用 Snell v4${RESET}"
+                    break
+                    ;;
+                3)
+                    echo -e "${CYAN}已取消更新${RESET}"
+                    return 0
+                    ;;
+                *)
+                    echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
+                    ;;
+            esac
+        done
+    else
+        # 如果当前是 v5 版本，直接使用 v5
+        SNELL_VERSION_CHOICE="v5"
+        echo -e "${GREEN}当前为 Snell v5，将检查 v5 更新${RESET}"
+    fi
     
     get_latest_snell_version
     get_current_snell_version
 
     if ! version_greater_equal "$CURRENT_VERSION" "$SNELL_VERSION"; then
-        echo -e "${YELLOW}当前 Snell 版本: ${CURRENT_VERSION}，最新版本: ${SNELL_VERSION}${RESET}"
+        echo -e "${YELLOW}当前 Snell 版本: ${CURRENT_VERSION}${RESET}"
+        echo -e "${YELLOW}最新 Snell 版本: ${SNELL_VERSION}${RESET}"
+        echo -e "\n${CYAN}更新说明：${RESET}"
+        echo -e "${GREEN}✓ 这是更新操作，不是重新安装${RESET}"
+        echo -e "${GREEN}✓ 所有现有配置将被保留（端口、密码、用户配置）${RESET}"
+        echo -e "${GREEN}✓ 服务会自动重启${RESET}"
+        echo -e "${GREEN}✓ 配置文件会自动备份${RESET}"
         echo -e "${CYAN}是否更新 Snell? [y/N]${RESET}"
         read -r choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
