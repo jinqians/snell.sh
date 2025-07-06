@@ -15,7 +15,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.0"
+current_version="2.1"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -94,14 +94,13 @@ get_latest_snell_v4_version() {
 
 # 获取 Snell v5 最新版本
 get_latest_snell_v5_version() {
-    # 根据官方文档，v5 目前只有测试版本 v5.0.0b1
-    # 未来如果有新版本，可以尝试从官方页面获取
+    # 尝试从官方页面获取最新 v5 版本
     local v5_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | head -n 1)
     if [ -n "$v5_version" ]; then
         echo "v${v5_version}"
     else
-        # 如果无法获取，使用官方文档中的测试版本
-        echo "v5.0.0b1"
+        # 如果无法获取，使用最新的测试版本 v5.0.0b2
+        echo "v5.0.0b2"
     fi
 }
 
@@ -120,19 +119,19 @@ get_snell_download_url() {
     local arch=$(uname -m)
     
     if [ "$version" = "v5" ]; then
-        # v5 版本使用 zip 格式，目前只有测试版本
+        # v5 版本自动拼接下载链接
         case ${arch} in
             "x86_64"|"amd64")
-                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-amd64.zip"
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
                 ;;
             "i386"|"i686")
-                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-i386.zip"
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
                 ;;
             "aarch64"|"arm64")
-                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-aarch64.zip"
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
                 ;;
             "armv7l"|"armv7")
-                echo "https://dl.nssurge.com/snell/snell-server-v5.0.0b1-linux-armv7l.zip"
+                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
                 ;;
             *)
                 echo -e "${RED}不支持的架构: ${arch}${RESET}"
@@ -600,76 +599,193 @@ get_current_snell_version() {
     fi
 }
 
+# 比较版本号
+version_greater_equal() {
+    local ver1=$1
+    local ver2=$2
+    
+    # 移除 'v' 或 'V' 前缀，并转换为小写
+    ver1=$(echo "${ver1#[vV]}" | tr '[:upper:]' '[:lower:]')
+    ver2=$(echo "${ver2#[vV]}" | tr '[:upper:]' '[:lower:]')
+    
+    # 处理 beta 版本号（如 5.0.0b1, 5.0.0b2）
+    # 将 beta 版本转换为可比较的格式
+    ver1=$(echo "$ver1" | sed 's/b\([0-9]*\)/\.999\1/g')
+    ver2=$(echo "$ver2" | sed 's/b\([0-9]*\)/\.999\1/g')
+    
+    # 将版本号分割为数组
+    IFS='.' read -ra VER1 <<< "$ver1"
+    IFS='.' read -ra VER2 <<< "$ver2"
+    
+    # 确保数组长度相等
+    while [ ${#VER1[@]} -lt 4 ]; do
+        VER1+=("0")
+    done
+    while [ ${#VER2[@]} -lt 4 ]; do
+        VER2+=("0")
+    done
+    
+    # 比较版本号
+    for i in {0..3}; do
+        local val1=${VER1[i]:-0}
+        local val2=${VER2[i]:-0}
+        
+        # 如果是数字，直接比较
+        if [[ "$val1" =~ ^[0-9]+$ ]] && [[ "$val2" =~ ^[0-9]+$ ]]; then
+            if [ "$val1" -gt "$val2" ]; then
+                return 0
+            elif [ "$val1" -lt "$val2" ]; then
+                return 1
+            fi
+        else
+            # 如果是字符串（如 beta 版本），按字典序比较
+            if [[ "$val1" > "$val2" ]]; then
+                return 0
+            elif [[ "$val1" < "$val2" ]]; then
+                return 1
+            fi
+        fi
+    done
+    return 0
+}
+
+# 只更新 Snell 二进制文件，不覆盖配置
+update_snell_binary() {
+    echo -e "${CYAN}=============== Snell 更新 ===============${RESET}"
+    echo -e "${YELLOW}注意：这是更新操作，不是重新安装${RESET}"
+    echo -e "${GREEN}✓ 所有现有配置将被保留${RESET}"
+    echo -e "${GREEN}✓ 端口、密码、用户配置都不会改变${RESET}"
+    echo -e "${GREEN}✓ 服务会自动重启${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+    
+    echo -e "${CYAN}正在备份当前配置...${RESET}"
+    local backup_dir
+    backup_dir=$(backup_snell_config)
+    echo -e "${GREEN}配置已备份到: $backup_dir${RESET}"
+
+    echo -e "${CYAN}正在更新 Snell 二进制文件...${RESET}"
+    
+    # 获取最新版本信息（版本已在 check_snell_update 中确定）
+    get_latest_snell_version
+    ARCH=$(uname -m)
+    SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
+
+    echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
+    
+    # v4 和 v5 版本都使用 zip 格式，统一处理
+    wget ${SNELL_URL} -O snell-server.zip
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
+        restore_snell_config "$backup_dir"
+        exit 1
+    fi
+
+    echo -e "${CYAN}正在替换 Snell 二进制文件...${RESET}"
+    unzip -o snell-server.zip -d ${INSTALL_DIR}
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}解压缩 Snell 失败。${RESET}"
+        restore_snell_config "$backup_dir"
+        exit 1
+    fi
+
+    rm snell-server.zip
+    chmod +x ${INSTALL_DIR}/snell-server
+
+    echo -e "${CYAN}正在重启 Snell 服务...${RESET}"
+    # 重启主服务
+    systemctl restart snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}主服务重启失败，尝试恢复配置...${RESET}"
+        restore_snell_config "$backup_dir"
+        systemctl restart snell
+    fi
+
+    echo -e "${CYAN}============================================${RESET}"
+    echo -e "${GREEN}✅ Snell 更新完成！${RESET}"
+    echo -e "${GREEN}✓ 版本已更新到: ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})${RESET}"
+    echo -e "${GREEN}✓ 所有配置已保留${RESET}"
+    echo -e "${GREEN}✓ 服务已重启${RESET}"
+    echo -e "${YELLOW}配置备份目录: $backup_dir${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+}
+
 # 检查 Snell 更新
 check_snell_update() {
     echo -e "\n${CYAN}=============== 检查 Snell 更新 ===============${RESET}"
     
-    # 选择要检查更新的 Snell 版本
-    select_snell_version
+    # 检测当前安装的 Snell 版本
+    local current_installed_version=$(detect_installed_snell_version)
+    if [ "$current_installed_version" = "unknown" ]; then
+        echo -e "${RED}无法检测当前 Snell 版本${RESET}"
+        return 1
+    fi
     
-    # 获取版本信息
+    echo -e "${YELLOW}当前安装版本: Snell ${current_installed_version}${RESET}"
+    
+    # 根据当前版本确定更新策略
+    if [ "$current_installed_version" = "v4" ]; then
+        # v4 用户：询问是否升级到 v5
+        echo -e "\n${CYAN}检测到您当前使用的是 Snell v4，是否要升级到 v5？${RESET}"
+        echo -e "${YELLOW}注意：v5 为测试版本，可能存在兼容性问题${RESET}"
+        echo -e "${GREEN}1.${RESET} 升级到 Snell v5"
+        echo -e "${GREEN}2.${RESET} 继续使用 Snell v4（检查 v4 更新）"
+        echo -e "${GREEN}3.${RESET} 取消更新"
+        
+        while true; do
+            read -rp "请选择 [1-3]: " upgrade_choice
+            case "$upgrade_choice" in
+                1)
+                    SNELL_VERSION_CHOICE="v5"
+                    echo -e "${GREEN}已选择升级到 Snell v5${RESET}"
+                    break
+                    ;;
+                2)
+                    SNELL_VERSION_CHOICE="v4"
+                    echo -e "${GREEN}已选择继续使用 Snell v4${RESET}"
+                    break
+                    ;;
+                3)
+                    echo -e "${CYAN}已取消更新${RESET}"
+                    return 0
+                    ;;
+                *)
+                    echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
+                    ;;
+            esac
+        done
+    else
+        # v5 用户：直接检查 v5 更新，无需用户选择
+        SNELL_VERSION_CHOICE="v5"
+        echo -e "${GREEN}当前为 Snell v5，将检查 v5 更新${RESET}"
+    fi
+    
+    # 获取最新版本信息
     get_latest_snell_version
     get_current_snell_version
     if [ $? -ne 0 ]; then
         return 1
     fi
 
-    # 比较版本
-    if [ "$CURRENT_VERSION" == "$SNELL_VERSION" ]; then
-        echo -e "${GREEN}当前已是最新版本 (${CURRENT_VERSION})。${RESET}"
-        return 0
-    else
-        echo -e "${YELLOW}当前 Snell 版本: ${CURRENT_VERSION}，最新版本: ${SNELL_VERSION}${RESET}"
+    echo -e "${YELLOW}当前 Snell 版本: ${CURRENT_VERSION}${RESET}"
+    echo -e "${YELLOW}最新 Snell 版本: ${SNELL_VERSION}${RESET}"
+
+    # 检查是否需要更新
+    if ! version_greater_equal "$CURRENT_VERSION" "$SNELL_VERSION"; then
+        echo -e "\n${CYAN}发现新版本，更新说明：${RESET}"
+        echo -e "${GREEN}✓ 这是更新操作，不是重新安装${RESET}"
+        echo -e "${GREEN}✓ 所有现有配置将被保留（端口、密码、用户配置）${RESET}"
+        echo -e "${GREEN}✓ 服务会自动重启${RESET}"
+        echo -e "${GREEN}✓ 配置文件会自动备份${RESET}"
         echo -e "${CYAN}是否更新 Snell? [y/N]${RESET}"
         read -r choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            # 备份配置
-            echo -e "${CYAN}正在备份当前配置...${RESET}"
-            local backup_dir
-            backup_dir=$(backup_snell_config)
-            echo -e "${GREEN}配置已备份到: $backup_dir${RESET}"
-
-            echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
-            echo -e "${YELLOW}下载链接: ${SNELL_URL}${RESET}"
-
-            # 下载新版本
-            SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
-
-            # 下载并解压
-            wget ${SNELL_URL} -O snell-server.zip
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败${RESET}"
-                restore_snell_config "$backup_dir"
-                return 1
-            fi
-
-            unzip -o snell-server.zip -d ${INSTALL_DIR}
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}解压缩 Snell 失败${RESET}"
-                restore_snell_config "$backup_dir"
-                return 1
-            fi
-
-            rm snell-server.zip
-            chmod +x ${INSTALL_DIR}/snell-server
-
-            # 重启服务
-            systemctl restart snell
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}服务重启失败，尝试恢复配置...${RESET}"
-                restore_snell_config "$backup_dir"
-                systemctl restart snell
-                return 1
-            fi
-
-            echo -e "${GREEN}Snell 已更新并重启，原有配置已保留。${RESET}"
-            echo -e "${YELLOW}配置备份目录: $backup_dir${RESET}"
-            show_information
+            update_snell_binary
         else
             echo -e "${CYAN}已取消更新。${RESET}"
         fi
+    else
+        echo -e "${GREEN}当前已是最新版本 (${CURRENT_VERSION})。${RESET}"
     fi
-    return 0
 }
 
 # 更新脚本
