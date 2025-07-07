@@ -99,8 +99,8 @@ get_latest_snell_v5_version() {
     if [ -n "$v5_version" ]; then
         echo "v${v5_version}"
     else
-        # 如果无法获取，使用最新的测试版本 v5.0.0b2
-        echo "v5.0.0b2"
+        # 如果无法获取，使用最新的测试版本 v5.0.0b3
+        echo "v5.0.0b3"
     fi
 }
 
