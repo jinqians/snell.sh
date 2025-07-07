@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="4.1"
+current_version="4.2"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -67,7 +67,7 @@ get_latest_snell_v5_version() {
         echo "v${v5_version}"
     else
         # 如果无法获取，使用最新的测试版本 v5.0.0b2
-        echo "v5.0.0b2"
+        echo "v5.0.0b3"
     fi
 }
 
