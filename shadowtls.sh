@@ -403,13 +403,11 @@ generate_snell_links() {
     
     echo -e "\n${YELLOW}=== Surge 配置 ===${RESET}"
     
-    # 根据 Snell 版本生成不同的配置
+    # v5 输出 v4/v5 两种格式，v4只输出v4
     if [ "$snell_version" = "5" ]; then
-        # v5 版本输出 v4 和 v5 两种配置
         echo -e "Snell v4 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
         echo -e "Snell v5 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
     else
-        # v4 版本只输出 v4 配置
         echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
     fi
 }
@@ -841,7 +839,13 @@ view_config() {
                             echo -e "  - 版本：3"
                             
                             echo -e "\n${GREEN}Surge 配置：${RESET}"
-                            echo -e "Snell-${port} = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
+                            local snell_version=$(get_snell_version)
+                            if [ "$snell_version" = "5" ]; then
+                                echo -e "Snell v4 + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
+                                echo -e "Snell v5 + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
+                            else
+                                echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
+                            fi
                             
                             # 检查服务状态
                             local service_status=$(systemctl is-active "shadowtls-snell-${port}")
