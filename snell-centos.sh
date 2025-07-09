@@ -15,7 +15,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.1"
+current_version="2.2"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -99,8 +99,8 @@ get_latest_snell_v5_version() {
     if [ -n "$v5_version" ]; then
         echo "v${v5_version}"
     else
-        # 如果无法获取，使用最新的测试版本 v5.0.0b3
-        echo "v5.0.0b3"
+        # 如果无法获取，使用最新的测试版本 v5.0.0b2
+        echo "v5.0.0b2"
     fi
 }
 
@@ -168,8 +168,9 @@ generate_surge_config() {
     local psk=$3
     local version=$4
     local country=$5
-    
-    if [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
+    local installed_version=$6   # 新增参数
+
+    if [ "$installed_version" = "v5" ]; then
         # v5 版本输出 v4 和 v5 两种配置
         echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
         echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
@@ -477,11 +478,12 @@ show_information() {
     
     # 显示 Surge 配置格式
     echo -e "\n${GREEN}Surge 配置格式:${RESET}"
+    local installed_version=$(detect_installed_snell_version)
     if [ ! -z "$IPV4_ADDR" ]; then
-        generate_surge_config "$IPV4_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV4"
+        generate_surge_config "$IPV4_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV4" "$installed_version"
     fi
     if [ ! -z "$IPV6_ADDR" ]; then
-        generate_surge_config "$IPV6_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV6"
+        generate_surge_config "$IPV6_ADDR" "$PORT" "$PSK" "$installed_version" "$IP_COUNTRY_IPV6" "$installed_version"
     fi
     
     echo -e "\n${GREEN}使用以下命令管理服务:${RESET}"
