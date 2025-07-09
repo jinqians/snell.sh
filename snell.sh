@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="4.3"
+current_version="4.4"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -1006,48 +1006,58 @@ view_snell_config() {
     fi
     
     # 如果 ShadowTLS 已安装，显示组合配置
-    if shadowtls_config=$(get_shadowtls_config); then
-        IFS='|' read -r stls_psk stls_domain stls_port <<< "$shadowtls_config"
-        echo -e "\n${YELLOW}=== ShadowTLS 配置 ===${RESET}"
-        echo -e "${GREEN}服务器配置：${RESET}"
-        echo -e "  - 监听端口：${stls_port}"
-        echo -e "  - 密码：${stls_psk}"
-        echo -e "  - SNI：${stls_domain}"
-        echo -e "  - 版本：3"
-        
-        # 获取所有用户配置
-        local user_configs=$(get_all_snell_users)
-        local installed_version=$(detect_installed_snell_version)
-        if [ ! -z "$user_configs" ]; then
-            while IFS='|' read -r port psk; do
-                if [ ! -z "$port" ]; then
-                    if [ "$port" = "$(get_snell_port)" ]; then
-                        echo -e "\n${GREEN}主用户 ShadowTLS 配置：${RESET}"
-                    else
-                        echo -e "\n${GREEN}用户 ShadowTLS 配置 (端口: ${port})：${RESET}"
-                    fi
-                    echo -e "\n${GREEN}Surge 配置格式：${RESET}"
-                    if [ ! -z "$IPV4_ADDR" ]; then
-                        if [ "$installed_version" = "v5" ]; then
-                            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                        else
-                            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                        fi
-                    fi
-                    if [ ! -z "$IPV6_ADDR" ]; then
-                        if [ "$installed_version" = "v5" ]; then
-                            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                        else
-                            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_psk}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
-                        fi
-                    fi
+    local snell_version=$(detect_installed_snell_version)
+    local snell_services=$(find /etc/systemd/system -name "shadowtls-snell-*.service" 2>/dev/null | sort -u)
+    if [ ! -z "$snell_services" ]; then
+        echo -e "\n${YELLOW}=== ShadowTLS 组合配置 ===${RESET}"
+        declare -A processed_ports
+        while IFS= read -r service_file; do
+            local exec_line=$(grep "ExecStart=" "$service_file")
+            local stls_port=$(echo "$exec_line" | grep -oP '(?<=--listen ::0:)\d+')
+            local stls_password=$(echo "$exec_line" | grep -oP '(?<=--password )[^ ]+')
+            local stls_domain=$(echo "$exec_line" | grep -oP '(?<=--tls )[^ ]+')
+            local snell_port=$(echo "$exec_line" | grep -oP '(?<=--server 127.0.0.1:)\d+')
+            # 查找 psk
+            local psk=""
+            if [ -f "${SNELL_CONF_DIR}/users/snell-${snell_port}.conf" ]; then
+                psk=$(grep -E '^psk' "${SNELL_CONF_DIR}/users/snell-${snell_port}.conf" | awk -F'=' '{print $2}' | tr -d ' ')
+            elif [ -f "${SNELL_CONF_DIR}/users/snell-main.conf" ] && [ "$snell_port" = "$(get_snell_port)" ]; then
+                psk=$(grep -E '^psk' "${SNELL_CONF_DIR}/users/snell-main.conf" | awk -F'=' '{print $2}' | tr -d ' ')
+            fi
+            # 避免重复
+            if [ -z "$snell_port" ] || [ -z "$psk" ] || [ -n "${processed_ports[$snell_port]}" ]; then
+                continue
+            fi
+            processed_ports[$snell_port]=1
+            if [ "$snell_port" = "$(get_snell_port)" ]; then
+                echo -e "\n${GREEN}主用户 ShadowTLS 配置：${RESET}"
+            else
+                echo -e "\n${GREEN}用户 ShadowTLS 配置 (端口: ${snell_port})：${RESET}"
+            fi
+            echo -e "  - Snell 端口：${snell_port}"
+            echo -e "  - PSK：${psk}"
+            echo -e "  - ShadowTLS 监听端口：${stls_port}"
+            echo -e "  - ShadowTLS 密码：${stls_password}"
+            echo -e "  - ShadowTLS SNI：${stls_domain}"
+            echo -e "  - 版本：3"
+            echo -e "\n${GREEN}Surge 配置格式：${RESET}"
+            if [ ! -z "$IPV4_ADDR" ]; then
+                if [ "$snell_version" = "v5" ]; then
+                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                else
+                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                 fi
-            done <<< "$user_configs"
-        else
-            echo -e "\n${YELLOW}未找到有效的 Snell 用户配置${RESET}"
-        fi
+            fi
+            if [ ! -z "$IPV6_ADDR" ]; then
+                if [ "$snell_version" = "v5" ]; then
+                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                else
+                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                fi
+            fi
+        done <<< "$snell_services"
     fi
     
     echo -e "\n${YELLOW}注意：${RESET}"
