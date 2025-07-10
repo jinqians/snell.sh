@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="4.4"
+current_version="4.5"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -50,23 +50,36 @@ select_snell_version() {
 
 # 获取 Snell v4 最新版本
 get_latest_snell_v4_version() {
-    latest_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    latest_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K4\.[0-9]+\.[0-9]+' | head -n 1)
+    if [ -z "$latest_version" ]; then
+        latest_version=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K4\.[0-9]+\.[0-9]+' | head -n 1)
+    fi
     if [ -n "$latest_version" ]; then
         echo "v${latest_version}"
     else
-        # 如果无法获取，使用默认版本，但不输出错误信息到返回值
         echo "v4.1.1"
     fi
 }
 
 # 获取 Snell v5 最新版本
 get_latest_snell_v5_version() {
-    # 尝试从官方页面获取最新 v5 版本
-    local v5_version=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | head -n 1)
-    if [ -n "$v5_version" ]; then
-        echo "v${v5_version}"
+    # 先抓 beta 版
+    v5_beta=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+b[0-9]+' | head -n 1)
+    if [ -z "$v5_beta" ]; then
+        v5_beta=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+b[0-9]+' | head -n 1)
+    fi
+    if [ -n "$v5_beta" ]; then
+        echo "v${v5_beta}"
+        return
+    fi
+    # 再抓正式版
+    v5_release=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
+    if [ -z "$v5_release" ]; then
+        v5_release=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
+    fi
+    if [ -n "$v5_release" ]; then
+        echo "v${v5_release}"
     else
-        # 如果无法获取，使用最新的测试版本 v5.0.0b2
         echo "v5.0.0b3"
     fi
 }
@@ -194,6 +207,22 @@ check_bc() {
             yum install -y bc
         else
             echo -e "${RED}未支持的包管理器，无法安装 bc。请手动安装 bc。${RESET}"
+            exit 1
+        fi
+    fi
+}
+
+# 检查 curl 是否安装
+check_curl() {
+    if ! command -v curl &> /dev/null; then
+        echo -e "${YELLOW}未检测到 curl，正在安装...${RESET}"
+        if [ -x "$(command -v apt)" ]; then
+            wait_for_apt
+            apt update && apt install -y curl
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y curl
+        else
+            echo -e "${RED}未支持的包管理器，无法安装 curl。请手动安装 curl。${RESET}"
             exit 1
         fi
     fi
@@ -1296,6 +1325,7 @@ check_root() {
 # 初始检查
 initial_check() {
     check_root
+    check_curl
     check_bc
     check_and_migrate_config
     check_and_show_status
