@@ -1,7 +1,7 @@
 - [中文](README.md) ｜ [English](README.en.md)
 ## 🥇 感谢赞助
-[ZMTO](https://console.zmto.com/?affid=1567)
-[ZMTO 测评](https://vps.jinqians.com/zmto/)
++ [ZMTO](https://console.zmto.com/?affid=1567)
++ [ZMTO 测评](https://vps.jinqians.com/zmto/)
 
 ## 手搓教程
 [点击跳转](https://vps.jinqians.com/snell-v4%e9%83%a8%e7%bd%b2%e6%95%99%e7%a8%8b/)
