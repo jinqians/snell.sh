@@ -15,7 +15,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="2.3"
+current_version="2.4"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -123,12 +123,12 @@ get_latest_snell_v5_version() {
     # 再抓正式版
     v5_release=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
     if [ -z "$v5_release" ]; then
-        v5_release=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
+        v5_release=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | grep -v b | head -n 1)
     fi
     if [ -n "$v5_release" ]; then
         echo "v${v5_release}"
     else
-        echo "v5.0.0b3"
+        echo "v5.0.0"
     fi
 }
 
