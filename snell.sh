@@ -72,15 +72,15 @@ get_latest_snell_v5_version() {
         echo "v${v5_beta}"
         return
     fi
-    # 再抓正式版
-    v5_release=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
+    # 再抓正式版，过滤掉带 b 的 beta 版本
+    v5_release=$(curl -s https://manual.nssurge.com/others/snell.html | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | grep -v b | head -n 1)
     if [ -z "$v5_release" ]; then
-        v5_release=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+' | head -n 1)
+        v5_release=$(curl -s https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell | grep -oP 'snell-server-v\K5\.[0-9]+\.[0-9]+[a-z0-9]*' | grep -v b | head -n 1)
     fi
     if [ -n "$v5_release" ]; then
         echo "v${v5_release}"
     else
-        echo "v5.0.0b3"
+        echo "v5.0.0"
     fi
 }
 
@@ -1105,7 +1105,7 @@ get_current_snell_version() {
         CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+[a-z0-9]*')
         if [ -z "$CURRENT_VERSION" ]; then
             # 如果无法获取，使用默认的 v5 版本
-            CURRENT_VERSION="v5.0.0b2"
+            CURRENT_VERSION="v5.0.0b3"
         fi
     else
         # v4 版本获取完整版本号
