@@ -24,9 +24,8 @@ SNELL_VERSION=""
 # 选择 Snell 版本
 select_snell_version() {
     echo -e "${CYAN}请选择要安装的 Snell 版本：${RESET}"
-    echo -e "${GREEN}1.${RESET} Snell v4 (稳定版)"
-    echo -e "${GREEN}2.${RESET} Snell v5 (测试版)"
-    echo -e "${YELLOW}注意：v5 为测试版本，可能存在兼容性问题${RESET}"
+    echo -e "${GREEN}1.${RESET} Snell v4"
+    echo -e "${GREEN}2.${RESET} Snell v5"
     
     while true; do
         read -rp "请输入选项 [1-2]: " version_choice
