@@ -20,7 +20,8 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案，已支持debian、ubuntu、centos、alpine。脚本支持一键部署 Snell v4/v5 或 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
 
 ## 食用教程
-### snell 安装脚本使用
+脚本自行判断系统，选择对应安装脚本
+### snell 安装
 ```bash
 sh -c "$(curl -fsSL https://install.jinqians.com)"
 ```
@@ -29,6 +30,7 @@ sh -c "$(curl -fsSL https://install.jinqians.com)"
 bash <(curl -L -s menu.jinqians.com)
 ```
 
+## 可自行根据系统选择
 #### Debian/Ubuntu安装
 ```bash
 bash <(curl -L -s snell.jinqians.com)
