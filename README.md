@@ -1,54 +1,4 @@
-- [中文](README.md) ｜ [English](README.en.md)
-## 🥇 感谢赞助
-+ [ZMTO](https://console.zmto.com/?affid=1567)
-+ [ZMTO 测评](https://vps.jinqians.com/zmto/)
-
-## 手搓教程
-[点击跳转](https://vps.jinqians.com/snell-v4%e9%83%a8%e7%bd%b2%e6%95%99%e7%a8%8b/)
-
-# Debian / Ubuntu Snell + ShadowTLS 一键安装脚本
-*请确保已安装curl/wget*
-
-**以下脚本根据需要选择**
-
-该脚本支持 Snell v4 和 v5 版本的安装，也可安装 Snell + ShadowTLS v3 组合
-
-+ snell | ss 2022 | shadowtls 多功能管理菜单
-```bash
-bash <(curl -L -s menu.jinqians.com)
-```
-+ snell安装脚本
-```bash
-bash <(curl -L -s snell.jinqians.com)
-```
-+ 下载脚本至本地执行 
-```bash
-wget https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -O snell.sh && chmod +x snell.sh && ./snell.sh
-```
-# Centos Snell 一键安装脚本
-**snell-centos 支持 Snell v4 和 v5 版本，暂不支持 Snell + ShadowTLS**
-+ snell安装脚本
-```bash
-bash <(curl -L -s snell-centos.jinqians.com)
-```
-+ 下载脚本至本地执行
-```bash
-wget https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/snell-centos.sh -O snell-centos.sh && chmod +x snell-centos.sh && ./snell-centos.sh
-```
-
-## 🆕 新版本特性 (v4.0)
-### Snell 版本支持
-- ✅ **Snell v4** - 稳定版本，生产环境推荐
-- ✅ **Snell v5** - 测试版本，支持新特性（QUIC Proxy、Dynamic Record Sizing 等）
-- ✅ **智能版本检测** - 自动检测当前安装的 Snell 版本
-- ✅ **版本升级选择** - 支持从 v4 升级到 v5，或继续使用 v4
-
-### 新功能
-- 🎯 **版本选择安装** - 安装时可选择 v4 或 v5 版本
-- 🔄 **智能更新** - 更新时可选择升级到 v5 或继续使用 v4
-- 📊 **版本状态显示** - 显示当前安装的 Snell 版本
-- 🔧 **多架构支持** - 支持 amd64、i386、aarch64、armv7l 架构
-- 📝 **配置输出优化** - v5 版本自动输出 v4 和 v5 两种 Surge 配置
+[中文](README.md) ｜ [English](README.en.md)
 
 ## 协议简介
 ### Snell 协议
@@ -57,18 +7,46 @@ Snell 协议是由 Surge 团队设计的一种轻量级、高效的加密代理�
 #### Snell v4 vs v5 对比
 | 特性 | Snell v4 | Snell v5 |
 |------|----------|----------|
-| 状态 | 稳定版 | 测试版 |
-| 兼容性 | 完全兼容 | 向下兼容 v4 |
+| 状态 | 稳定版 | 最新版 |
+| 完全性 | ✅ | ✅ |
 | QUIC Proxy | ❌ | ✅ |
 | Dynamic Record Sizing | ❌ | ✅ |
 | 出口控制 | ❌ | ✅ |
-| 生产环境 | ✅ 推荐 | ⚠️ 测试用 |
 
 ### ShadowTLS
 ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹检测。它通过模拟正常的 HTTPS 流量，提供更好的隐私保护和连接稳定性。
 
-## 介绍
-该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案。脚本支持一键部署 Snell v4/v5 或 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
+## 脚本介绍
+该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案，已支持debian、ubuntu、centos、alpine。脚本支持一键部署 Snell v4/v5 或 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
+
+## 食用教程
+### snell 安装脚本使用
+```bash
+sh -c "$(curl -fsSL https://install.jinqians.com)"
+```
+### 多功能管理菜单使用(仅支持debian/ubuntu)
+```bash
+bash <(curl -L -s menu.jinqians.com)
+```
+
+#### Debian/Ubuntu安装
+```bash
+bash <(curl -L -s snell.jinqians.com)
+```
+#### CentOS安装
+```bash
+bash <(curl -L -s snell-centos.jinqians.com)
+```
+#### Alpine安装
+```bash
+sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
+```
+## 🥇 感谢赞助
++ [ZMTO](https://console.zmto.com/?affid=1567)
++ [ZMTO 测评](https://vps.jinqians.com/zmto/)
+
+## 手搓教程
+[点击跳转](https://vps.jinqians.com/snell-v4%e9%83%a8%e7%bd%b2%e6%95%99%e7%a8%8b/)
 
 ## Surge配置文件
 自用配置文件：https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
