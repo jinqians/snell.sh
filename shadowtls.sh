@@ -333,11 +333,10 @@ generate_ss_links() {
     
     # 生成 SS + ShadowTLS 合并链接
     local userinfo=$(echo -n "${ssrust_method}:${ssrust_password}" | base64 | tr -d '\n')
-    # shadow_tls_config = plugin:shadow-tls,host=${stls_sni},password=${stls_password},version=3
-    local shadow_tls_config="plugin:shadow-tls,host=${stls_sni},password=${stls_password},version=3"
-    local shadow_tls_param="shadow-tls=${shadow_tls_config}"
-    local ss_url="ss://${userinfo}@${server_ip}:${listen_port}?${shadow_tls_param}"
-    
+    # shadow_tls_config = plugin=shadow-tls;host=${stls_sni};password=${stls_password};version=3
+    local shadow_tls_config="plugin=shadow-tls;host=${stls_sni};password=${stls_password};version=3"
+    local ss_url="ss://${userinfo}@${server_ip}:${listen_port}?${shadow_tls_config}"
+
     echo -e "\n${YELLOW}=== Surge 配置 ===${RESET}"
     echo -e "SS-${server_ip} = ss, ${server_ip}, ${listen_port}, encrypt-method=${ssrust_method}, password=${ssrust_password}, shadow-tls-password=${stls_password}, shadow-tls-sni=${stls_sni}, shadow-tls-version=3, udp-relay=true"
     
