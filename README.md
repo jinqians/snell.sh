@@ -39,6 +39,10 @@ bash <(curl -L -s snell.jinqians.com)
 ```bash
 bash <(curl -L -s snell-centos.jinqians.com)
 ```
+#### Alpine 安装(Docker版)
+```bash
+sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
+```
 #### Alpine 3.18安装
 ```bash
 sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
