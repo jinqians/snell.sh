@@ -60,7 +60,7 @@ ensure_packages "curl"
 
 DEBIAN_URL="http://snell.jinqians.com"
 CENTOS_URL="http://snell-centos.jinqians.com"
-ALPINE_URL="http://snell-alpine.jinqians.com"
+ALPINE_URL="http://snell-docker.jinqians.com"
 
 main() {
   url=$1
