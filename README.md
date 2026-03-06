@@ -1,6 +1,6 @@
 [中文](README.md) ｜ [English](README.en.md)
 <details>
-   <summary>协议简介</summary>
+   <summary>协议简介[点击展开]</summary>
    
 ### Snell 协议
 Snell 协议是由 Surge 团队设计的一种轻量级、高效的加密代理协议，专注于提供安全、快速的网络传输服务。该协议通过简洁的设计和强大的加密技术，满足了用户对隐私保护和高性能传输的需求。
@@ -22,7 +22,7 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 </details>
 
 <details>
-   <summary>食用教程</summary>
+   <summary>脚本食用说明[点击展开]</summary>
    
 脚本自行判断系统，选择对应安装脚本
 ### snell 安装
@@ -53,7 +53,7 @@ sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
 ```
 </details>
 
-## 🥇 感谢赞助
+## 🥇 赞助
 + [ZMTO](https://console.zmto.com/?affid=1567)
 + [ZMTO 测评](https://vps.jinqians.com/zmto/)
 
@@ -61,7 +61,7 @@ sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
 [点击跳转](https://vps.jinqians.com/snell-v4%e9%83%a8%e7%bd%b2%e6%95%99%e7%a8%8b/)
 
 <details>
-   <summary>surge配置文件</summary>
+   <summary>surge配置文件[点击展开]</summary>
    
 ## Surge配置文件
 自用配置文件：https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
@@ -74,7 +74,7 @@ sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
 </details>
 
 <details>
-   <summary>脚本输出示例</summary>
+   <summary>脚本输出示例[点击展开]</summary>
    
 ### Snell v4 配置
 ```
