@@ -43,13 +43,40 @@ bash <(curl -L -s snell.jinqians.com)
 ```bash
 bash <(curl -L -s snell-centos.jinqians.com)
 ```
-#### Alpine 安装(Docker版)
+#### Alpine 安装(本地构建)
 ```bash
 sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
 ```
 #### Alpine 3.18安装
 ```bash
 sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
+```
+#### Docker
+```bash
+docker run -d --name snell-server \
+  --restart unless-stopped \
+  --network host \
+  -e SNELL_PORT=6160 \
+  -e SNELL_PSK=your_psk \
+  -e SNELL_VER=v5 \
+  jinqians/snell-server:latest
+```
+
+#### Docker Compose
+当前为镜像为5.0.1
+```yaml
+services:
+  snell:
+    image: jinqians/snell-server:latest
+    container_name: snell-server
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - SNELL_PORT=6160
+      - SNELL_PSK=jinqians.com   # 自定义密钥，留空则自动生成
+      - SNELL_VER=v5
+    volumes:
+      - ./snell-config:/etc/snell
 ```
 </details>
 
