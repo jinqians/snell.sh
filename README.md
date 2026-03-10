@@ -1,6 +1,7 @@
 [中文](README.md) ｜ [English](README.en.md)
+## Snell 协议
 <details>
-   <summary>协议简介[点击展开]</summary>
+   <summary>协议简介[展开查看]</summary>
    
 ### Snell 协议
 Snell 协议是由 Surge 团队设计的一种轻量级、高效的加密代理协议，专注于提供安全、快速的网络传输服务。该协议通过简洁的设计和强大的加密技术，满足了用户对隐私保护和高性能传输的需求。
@@ -21,8 +22,9 @@ ShadowTLS 是一个轻量级的 TLS 伪装工具，能够有效规避 TLS 指纹
 该管理脚本为基于 Linux 系统的 Snell 和 ShadowTLS 代理服务提供了高效、自动化的管理解决方案，已支持debian、ubuntu、centos、alpine。脚本支持一键部署 Snell v4/v5 或 Snell + ShadowTLS 组合，通过简洁的命令实现安装、配置、版本控制以及卸载，帮助用户快速搭建安全可靠的代理服务。
 </details>
 
+## 食用说明
 <details>
-   <summary>脚本食用说明[点击展开]</summary>
+   <summary>脚本食用说明[展开查看]</summary>
    
 脚本自行判断系统，选择对应安装脚本
 ### snell 安装
@@ -129,3 +131,4 @@ HK = snell, 1.2.3.4, 8989, psk = xxxxxxxxxxxx, version = 4, reuse = true, tfo = 
 HK = snell, ::1, 8989, psk = xxxxxxxxxxxx, version = 4, reuse = true, tfo = true, shadow-tls-password = yyyyyyyyyyyy, shadow-tls-sni = www.microsoft.com, shadow-tls-version = 3
 ```
 </details>
+
