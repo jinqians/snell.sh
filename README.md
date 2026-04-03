@@ -37,22 +37,15 @@ bash <(curl -L -s menu.jinqians.com)
 ```
 
 ## 可自行根据系统选择
-#### Debian/Ubuntu安装
+### Debian/Ubuntu安装
 ```bash
 bash <(curl -L -s snell.jinqians.com)
 ```
-#### CentOS安装
+### CentOS安装
 ```bash
 bash <(curl -L -s snell-centos.jinqians.com)
 ```
-#### Alpine 安装(本地构建)
-```bash
-sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
-```
-#### Alpine 3.18安装
-```bash
-sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
-```
+### Alpine (推荐Docker 安装)
 #### Docker
 ```bash
 docker run -d --name snell-server \
@@ -80,6 +73,15 @@ services:
     volumes:
       - ./snell-config:/etc/snell
 ```
+#### Alpine 安装(本地构建Docker容器)
+```bash
+sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
+```
+#### Alpine 3.18安装
+```bash
+sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
+```
+
 </details>
 
 ## 🥇 赞助
