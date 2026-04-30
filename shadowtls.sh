@@ -40,11 +40,21 @@ install_requirements() {
 
 # 获取最新版本
 get_latest_version() {
-    latest_version=$(curl -s "https://api.github.com/repos/ihciah/shadow-tls/releases/latest" | jq -r .tag_name)
-    if [ -z "$latest_version" ]; then
+    local latest_version=""
+
+    # 优先走 API；失败时 jq 可能返回 "null"
+    latest_version=$(curl -fsSL "https://api.github.com/repos/ihciah/shadow-tls/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null)
+
+    # API 异常（如限流）时，回退到 releases/latest 的重定向结果
+    if [ -z "$latest_version" ] || [ "$latest_version" = "null" ]; then
+        latest_version=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/ihciah/shadow-tls/releases/latest" 2>/dev/null | sed -E 's#.*/tag/##')
+    fi
+
+    if [ -z "$latest_version" ] || [ "$latest_version" = "null" ]; then
         echo -e "${RED}获取最新版本失败${RESET}"
         exit 1
     fi
+
     echo "$latest_version"
 }
 
@@ -530,6 +540,10 @@ install_shadowtls() {
     
     # 获取最新版本
     version=$(get_latest_version)
+    if [ -z "$version" ] || [ "$version" = "null" ]; then
+        echo -e "${RED}无法解析 ShadowTLS 版本号，安装中止${RESET}"
+        exit 1
+    fi
     
     # 下载并安装
     download_url="https://github.com/ihciah/shadow-tls/releases/download/${version}/shadow-tls-${arch}"
