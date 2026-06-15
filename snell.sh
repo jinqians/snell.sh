@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="4.6"
+current_version="4.7"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -26,9 +26,10 @@ select_snell_version() {
     echo -e "${CYAN}请选择要安装的 Snell 版本：${RESET}"
     echo -e "${GREEN}1.${RESET} Snell v4"
     echo -e "${GREEN}2.${RESET} Snell v5"
-    
+    echo -e "${GREEN}3.${RESET} Snell v6 (Beta)"
+
     while true; do
-        read -rp "请输入选项 [1-2]: " version_choice
+        read -rp "请输入选项 [1-3]: " version_choice
         case "$version_choice" in
             1)
                 SNELL_VERSION_CHOICE="v4"
@@ -40,8 +41,14 @@ select_snell_version() {
                 echo -e "${GREEN}已选择 Snell v5${RESET}"
                 break
                 ;;
+            3)
+                SNELL_VERSION_CHOICE="v6"
+                echo -e "${GREEN}已选择 Snell v6 (Beta)${RESET}"
+                echo -e "${YELLOW}注意：v6 为 Beta 版本，协议可能存在不兼容更新${RESET}"
+                break
+                ;;
             *)
-                echo -e "${RED}请输入正确的选项 [1-2]${RESET}"
+                echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
                 ;;
         esac
     done
@@ -83,9 +90,22 @@ get_latest_snell_v5_version() {
     fi
 }
 
+# 获取 Snell v6 最新版本
+get_latest_snell_v6_version() {
+    local v6_ver
+    v6_ver=$(curl -s https://kb.nssurge.com/surge-knowledge-base/release-notes/snell | grep -oP 'snell-server-v\K6\.[0-9]+\.[0-9]+[a-z0-9]*' | head -n 1)
+    if [ -n "$v6_ver" ]; then
+        echo "v${v6_ver}"
+    else
+        echo "v6.0.0b2"
+    fi
+}
+
 # 获取 Snell 最新版本（根据选择的版本）
 get_latest_snell_version() {
-    if [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
+    if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
+        SNELL_VERSION=$(get_latest_snell_v6_version)
+    elif [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
         SNELL_VERSION=$(get_latest_snell_v5_version)
     else
         SNELL_VERSION=$(get_latest_snell_v4_version)
@@ -94,50 +114,32 @@ get_latest_snell_version() {
 
 # 获取 Snell 下载 URL
 get_snell_download_url() {
-    local version=$1
     local arch=$(uname -m)
-    
-    if [ "$version" = "v5" ]; then
-        # v5 版本自动拼接下载链接
-        case ${arch} in
-            "x86_64"|"amd64")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-                ;;
-            "i386"|"i686")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
-                ;;
-            "aarch64"|"arm64")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-                ;;
-            "armv7l"|"armv7")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
-                ;;
-            *)
-                echo -e "${RED}不支持的架构: ${arch}${RESET}"
-                exit 1
-                ;;
-        esac
-    else
-        # v4 版本使用 zip 格式
-        case ${arch} in
-            "x86_64"|"amd64")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-                ;;
-            "i386"|"i686")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
-                ;;
-            "aarch64"|"arm64")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-                ;;
-            "armv7l"|"armv7")
-                echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
-                ;;
-            *)
-                echo -e "${RED}不支持的架构: ${arch}${RESET}"
-                exit 1
-                ;;
-        esac
+
+    # v6 暂不提供 armv7l 构建
+    if [ "$SNELL_VERSION_CHOICE" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
+        echo -e "${RED}Snell v6 暂不支持 armv7l 架构${RESET}" >&2
+        exit 1
     fi
+
+    case ${arch} in
+        "x86_64"|"amd64")
+            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+            ;;
+        "i386"|"i686")
+            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
+            ;;
+        "aarch64"|"arm64")
+            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+            ;;
+        "armv7l"|"armv7")
+            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
+            ;;
+        *)
+            echo -e "${RED}不支持的架构: ${arch}${RESET}" >&2
+            exit 1
+            ;;
+    esac
 }
 
 # 生成 Surge 配置格式
@@ -147,9 +149,12 @@ generate_surge_config() {
     local psk=$3
     local version=$4
     local country=$5
-    local installed_version=$6   # 新增参数
+    local installed_version=$6
 
-    if [ "$installed_version" = "v5" ]; then
+    if [ "$installed_version" = "v6" ]; then
+        # v6 版本：v6 协议（已移除 QUIC 模式）
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 6, reuse = true, tfo = true${RESET}"
+    elif [ "$installed_version" = "v5" ]; then
         # v5 版本输出 v4 和 v5 两种配置
         echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
         echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
@@ -162,9 +167,10 @@ generate_surge_config() {
 # 检测当前安装的 Snell 版本
 detect_installed_snell_version() {
     if command -v snell-server &> /dev/null; then
-        # 尝试获取版本信息
         local version_output=$(snell-server --v 2>&1)
-        if echo "$version_output" | grep -q "v5"; then
+        if echo "$version_output" | grep -q "v6"; then
+            echo "v6"
+        elif echo "$version_output" | grep -q "v5"; then
             echo "v5"
         else
             echo "v4"
@@ -233,10 +239,82 @@ SYSTEMD_DIR="/etc/systemd/system"
 SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/users/snell-main.conf"
 SYSTEMD_SERVICE_FILE="${SYSTEMD_DIR}/snell.service"
+SYSTEMD_SOCKET_FILE="${SYSTEMD_DIR}/snell.socket"
+SYSTEMD_NETNS_FILE="${SYSTEMD_DIR}/snell-netns.service"
+NETNS_SETUP_SCRIPT="${INSTALL_DIR}/snell-netns-setup.sh"
+
+# 出口控制（netns + socket activation）默认参数
+EGRESS_FEATURE_ENABLED="false"
+EGRESS_IFACE=""
+EGRESS_NS="snell-egress"
+EGRESS_HOST_IP=""
+EGRESS_NS_IP=""
+EGRESS_SUBNET=""
+EGRESS_GW=""
 
 # 旧的配置文件路径（用于兼容性检查）
 OLD_SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
 OLD_SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
+
+# 根据 /30 子网生成 host/ns 地址与网关
+apply_egress_subnet() {
+    local subnet="$1"
+    local base prefix
+
+    base="${subnet%/30}"
+    prefix="${base%.*}"
+
+    EGRESS_SUBNET="$subnet"
+    EGRESS_HOST_IP="${prefix}.1/30"
+    EGRESS_NS_IP="${prefix}.2/30"
+    EGRESS_GW="${prefix}.1"
+}
+
+# 自动选择未占用的 /30 子网（默认池：172.31.0.0/16）
+auto_pick_egress_subnet() {
+    local i candidate
+
+    if ! command -v ip &> /dev/null; then
+        apply_egress_subnet "172.31.0.0/30"
+        return
+    fi
+
+    for i in $(seq 0 255); do
+        candidate="172.31.${i}.0/30"
+        if ip -o -4 addr show | grep -q "172\\.31\\.${i}\\."; then
+            continue
+        fi
+        if ip -4 route show | grep -q "172\\.31\\.${i}\\."; then
+            continue
+        fi
+
+        apply_egress_subnet "$candidate"
+        return
+    done
+
+    apply_egress_subnet "172.31.0.0/30"
+}
+
+# 初始化默认网段
+auto_pick_egress_subnet
+
+# 自动检测默认出口网卡
+auto_detect_egress_iface() {
+    local detected_iface
+
+    if command -v ip &> /dev/null; then
+        detected_iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')
+    fi
+
+    if [ -n "$detected_iface" ]; then
+        EGRESS_IFACE="$detected_iface"
+    elif [ -z "$EGRESS_IFACE" ]; then
+        EGRESS_IFACE="eth1"
+    fi
+}
+
+# 初始化默认出口网卡
+auto_detect_egress_iface
 
 # 检查并迁移旧配置
 check_and_migrate_config() {
@@ -488,6 +566,315 @@ get_dns() {
     fi
 }
 
+# 是否启用 Snell v5/v6 出口控制
+get_egress_feature_choice() {
+    EGRESS_FEATURE_ENABLED="false"
+    if [ "$SNELL_VERSION_CHOICE" != "v5" ] && [ "$SNELL_VERSION_CHOICE" != "v6" ]; then
+        return
+    fi
+
+    echo -e "${CYAN}是否启用 Snell ${SNELL_VERSION_CHOICE} 出口控制（netns + socket activation）？${RESET}"
+    echo -e "${GREEN}1.${RESET} 启用（新特性）"
+    echo -e "${GREEN}2.${RESET} 不启用（推荐）"
+
+    while true; do
+        read -rp "请输入选项 [1-2]: " egress_choice
+        case "$egress_choice" in
+            1)
+                EGRESS_FEATURE_ENABLED="true"
+                echo -e "${GREEN}已启用 Snell v5 出口控制${RESET}"
+                break
+                ;;
+            2)
+                EGRESS_FEATURE_ENABLED="false"
+                echo -e "${YELLOW}已选择传统模式${RESET}"
+                break
+                ;;
+            *)
+                echo -e "${RED}请输入正确的选项 [1-2]${RESET}"
+                ;;
+        esac
+    done
+}
+
+# 获取出口控制相关参数
+get_egress_settings() {
+    if [ "$EGRESS_FEATURE_ENABLED" != "true" ]; then
+        return
+    fi
+
+    auto_detect_egress_iface
+    read -rp "请输入出口接口名称（默认 ${EGRESS_IFACE}）: " custom_iface
+    if [ -n "$custom_iface" ]; then
+        EGRESS_IFACE="$custom_iface"
+    fi
+
+    read -rp "请输入 netns 名称（默认 snell-egress）: " custom_ns
+    if [ -n "$custom_ns" ]; then
+        EGRESS_NS="$custom_ns"
+    fi
+
+    # 自动探测默认子网，并允许用户手工覆盖
+    auto_pick_egress_subnet
+    read -rp "请输入 veth 子网（CIDR，默认 ${EGRESS_SUBNET}）: " custom_subnet
+    if [ -n "$custom_subnet" ]; then
+        if [[ "$custom_subnet" =~ ^([0-9]{1,3}\.){3}0/30$ ]]; then
+            apply_egress_subnet "$custom_subnet"
+        else
+            echo -e "${YELLOW}子网格式无效，继续使用自动选择：${EGRESS_SUBNET}${RESET}"
+        fi
+    fi
+
+    echo -e "${GREEN}出口接口: ${EGRESS_IFACE}${RESET}"
+    echo -e "${GREEN}命名空间: ${EGRESS_NS}${RESET}"
+    echo -e "${GREEN}veth 子网: ${EGRESS_SUBNET}${RESET}"
+    echo -e "${YELLOW}说明：${EGRESS_HOST_IP}（主命名空间） <-> ${EGRESS_NS_IP}（${EGRESS_NS}）${RESET}"
+}
+
+# 检查出口控制依赖
+check_egress_dependencies() {
+    if [ "$EGRESS_FEATURE_ENABLED" != "true" ]; then
+        return
+    fi
+
+    if ! command -v ip &> /dev/null; then
+        echo -e "${YELLOW}未检测到 iproute2，正在安装...${RESET}"
+        if [ -x "$(command -v apt)" ]; then
+            wait_for_apt
+            apt update && apt install -y iproute2
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y iproute
+        else
+            echo -e "${RED}未支持的包管理器，无法安装 iproute2。${RESET}"
+            exit 1
+        fi
+    fi
+
+    if ! command -v nft &> /dev/null; then
+        echo -e "${YELLOW}未检测到 nftables，正在安装...${RESET}"
+        if [ -x "$(command -v apt)" ]; then
+            wait_for_apt
+            apt update && apt install -y nftables
+        elif [ -x "$(command -v yum)" ]; then
+            yum install -y nftables
+        else
+            echo -e "${RED}未支持的包管理器，无法安装 nftables。${RESET}"
+            exit 1
+        fi
+    fi
+}
+
+# 写入 netns 初始化单元
+write_snell_netns_service() {
+    cat > ${NETNS_SETUP_SCRIPT} << EOF
+#!/bin/bash
+set -eux
+
+ip netns add ${EGRESS_NS} 2>/dev/null || true
+ip link show veth-host >/dev/null 2>&1 || ip link add veth-host type veth peer name veth-snell
+ip link set veth-snell netns ${EGRESS_NS} 2>/dev/null || true
+
+ip addr replace ${EGRESS_HOST_IP} dev veth-host
+ip link set veth-host up
+
+ip netns exec ${EGRESS_NS} ip addr replace ${EGRESS_NS_IP} dev veth-snell
+ip netns exec ${EGRESS_NS} ip link set lo up
+ip netns exec ${EGRESS_NS} ip link set veth-snell up
+ip netns exec ${EGRESS_NS} ip route replace default via ${EGRESS_GW}
+
+mkdir -p /etc/netns/${EGRESS_NS}
+cp -f /etc/resolv.conf /etc/netns/${EGRESS_NS}/resolv.conf
+if grep -Eq '^nameserver[[:space:]]+127\\.0\\.0\\.53$' /etc/netns/${EGRESS_NS}/resolv.conf; then
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/netns/${EGRESS_NS}/resolv.conf
+fi
+
+sysctl -w net.ipv4.ip_forward=1
+
+nft delete table ip snell_nat 2>/dev/null || true
+nft add table ip snell_nat
+nft add chain ip snell_nat postrouting '{ type nat hook postrouting priority 100; policy accept; }'
+nft add rule ip snell_nat postrouting oifname "${EGRESS_IFACE}" ip saddr ${EGRESS_SUBNET} masquerade
+
+nft add table inet snell_filter 2>/dev/null || true
+nft list chain inet snell_filter forward >/dev/null 2>&1 || nft add chain inet snell_filter forward '{ type filter hook forward priority -5; policy accept; }'
+nft add rule inet snell_filter forward iifname 'veth-host' oifname "${EGRESS_IFACE}" ip saddr ${EGRESS_SUBNET} accept 2>/dev/null || true
+nft add rule inet snell_filter forward iifname "${EGRESS_IFACE}" oifname 'veth-host' ct state established,related accept 2>/dev/null || true
+
+if command -v iptables >/dev/null 2>&1; then
+    iptables -C FORWARD -i veth-host -o ${EGRESS_IFACE} -s ${EGRESS_SUBNET} -j ACCEPT 2>/dev/null || iptables -I FORWARD -i veth-host -o ${EGRESS_IFACE} -s ${EGRESS_SUBNET} -j ACCEPT
+    iptables -C FORWARD -i ${EGRESS_IFACE} -o veth-host -d ${EGRESS_SUBNET} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -I FORWARD -i ${EGRESS_IFACE} -o veth-host -d ${EGRESS_SUBNET} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+fi
+EOF
+    chmod +x ${NETNS_SETUP_SCRIPT}
+
+    cat > ${SYSTEMD_NETNS_FILE} << EOF
+[Unit]
+Description=Prepare netns and NAT for Snell egress
+DefaultDependencies=no
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${NETNS_SETUP_SCRIPT}
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# 写入 socket activation 单元
+write_snell_socket_service_units() {
+    local listen_port=$1
+
+    cat > ${SYSTEMD_SOCKET_FILE} << EOF
+[Unit]
+Description=Snell v5 (socket-activated)
+
+[Socket]
+ListenStream=0.0.0.0:${listen_port}
+ListenDatagram=0.0.0.0:${listen_port}
+FileDescriptorName=snell_inet
+ReusePort=no
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target
+EOF
+
+    cat > ${SYSTEMD_SERVICE_FILE} << EOF
+[Unit]
+Description=Snell Proxy Service (Main, netns)
+Requires=snell-netns.service
+After=snell-netns.service
+
+[Service]
+Type=simple
+NetworkNamespacePath=/run/netns/${EGRESS_NS}
+BindReadOnlyPaths=/etc/netns/${EGRESS_NS}/resolv.conf:/etc/resolv.conf
+User=nobody
+Group=nogroup
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+LimitNOFILE=32768
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+Restart=on-failure
+RestartSec=2s
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# 检查端口是否被占用（TCP/UDP）
+is_port_in_use() {
+    local port="$1"
+    if command -v ss &> /dev/null; then
+        ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q . && return 0
+        ss -H -lun "( sport = :${port} )" 2>/dev/null | grep -q . && return 0
+        return 1
+    fi
+
+    if command -v lsof &> /dev/null; then
+        lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+        lsof -nP -iUDP:"${port}" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
+
+# 显示占用指定端口的进程信息
+show_port_occupier() {
+    local port="$1"
+    if command -v ss &> /dev/null; then
+        ss -ltnp "( sport = :${port} )" 2>/dev/null | sed 's/^/  /'
+        ss -lunp "( sport = :${port} )" 2>/dev/null | sed 's/^/  /'
+        return
+    fi
+
+    if command -v lsof &> /dev/null; then
+        lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sed 's/^/  /'
+        lsof -nP -iUDP:"${port}" 2>/dev/null | sed 's/^/  /'
+    fi
+}
+
+# 按端口强制清理监听进程（优先清理 snell 相关，最后兜底清理全部监听者）
+force_release_port_by_pid() {
+    local port="$1"
+    local pids pid cmd
+
+    if command -v ss &> /dev/null; then
+        pids=$( {
+            ss -H -ltnp "( sport = :${port} )" 2>/dev/null
+            ss -H -lunp "( sport = :${port} )" 2>/dev/null
+        } | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)
+    elif command -v lsof &> /dev/null; then
+        pids=$( {
+            lsof -t -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null
+            lsof -t -nP -iUDP:"${port}" 2>/dev/null
+        } | sort -u)
+    fi
+
+    [ -z "$pids" ] && return 0
+
+    for pid in $pids; do
+        cmd=$(ps -p "$pid" -o args= 2>/dev/null)
+        if echo "$cmd" | grep -q "snell"; then
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+    done
+
+    sleep 0.2
+
+    if is_port_in_use "$port"; then
+        for pid in $pids; do
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+    fi
+}
+
+# 切换到 socket activation 前，确保主端口已释放
+ensure_main_port_free_for_socket() {
+    local port="$1"
+    local i
+
+    systemctl stop snell.socket 2>/dev/null
+    systemctl stop snell 2>/dev/null
+    systemctl disable snell 2>/dev/null
+    systemctl reset-failed snell.socket 2>/dev/null
+
+    # 兜底：避免残留 snell-server 进程继续占用端口
+    systemctl kill snell --signal=SIGKILL 2>/dev/null
+    pkill -f "${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}" 2>/dev/null || true
+    force_release_port_by_pid "$port"
+
+    for i in {1..20}; do
+        if ! is_port_in_use "$port"; then
+            return 0
+        fi
+        sleep 0.2
+    done
+
+    echo -e "${RED}端口 ${port} 仍被占用，无法启动 snell.socket。${RESET}"
+    echo -e "${YELLOW}占用详情：${RESET}"
+    show_port_occupier "$port"
+    return 1
+}
+
 # 开放端口 (ufw 和 iptables)
 open_port() {
     local PORT=$1
@@ -495,12 +882,14 @@ open_port() {
     if command -v ufw &> /dev/null; then
         echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
         ufw allow "$PORT"/tcp
+        ufw allow "$PORT"/udp
     fi
 
     # 检查 iptables 是否已安装
     if command -v iptables &> /dev/null; then
         echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
         iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+        iptables -I INPUT -p udp --dport "$PORT" -j ACCEPT
         
         # 创建 iptables 规则保存目录（如果不存在）
         if [ ! -d "/etc/iptables" ]; then
@@ -510,6 +899,46 @@ open_port() {
         # 尝试保存规则，如果失败则不中断脚本
         iptables-save > /etc/iptables/rules.v4 || true
     fi
+}
+
+# 启用 egress 运行时：优先 socket + service；失败回退为 netns 直启服务
+start_egress_runtime() {
+    local port="$1"
+
+    if ! ensure_main_port_free_for_socket "$port"; then
+        return 1
+    fi
+
+    if ! systemctl enable snell.socket; then
+        echo -e "${RED}启用 snell.socket 失败。${RESET}"
+        return 1
+    fi
+    if ! systemctl start snell.socket; then
+        echo -e "${RED}启动 snell.socket 失败。${RESET}"
+        return 1
+    fi
+
+    # 关键：主动拉起 snell，确保 UDP/QUIC 可用，不依赖首次 TCP 触发
+    if systemctl start snell; then
+        echo -e "${GREEN}已启用 socket + service 运行模式。${RESET}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}socket 模式下主动拉起 snell 失败，自动回退到 netns 直启服务模式。${RESET}"
+    systemctl stop snell.socket 2>/dev/null
+    systemctl disable snell.socket 2>/dev/null
+
+    if ! systemctl enable snell; then
+        echo -e "${RED}回退模式：启用 snell 失败。${RESET}"
+        return 1
+    fi
+    if ! systemctl restart snell; then
+        echo -e "${RED}回退模式：启动 snell 失败。${RESET}"
+        return 1
+    fi
+
+    echo -e "${GREEN}已回退为 netns 直启服务模式（无 socket 激活）。${RESET}"
+    return 0
 }
 
 # 安装 Snell
@@ -529,7 +958,7 @@ install_snell() {
     echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
     echo -e "${YELLOW}下载链接: ${SNELL_URL}${RESET}"
     
-    # v4 和 v5 版本都使用 zip 格式，统一处理
+    # v4/v5/v6 均使用 zip 格式，统一处理
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
@@ -547,6 +976,9 @@ install_snell() {
 
     get_user_port  # 获取用户输入的端口
     get_dns # 获取用户输入的 DNS 服务器
+    get_egress_feature_choice
+    get_egress_settings
+    check_egress_dependencies
     PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
     # 创建用户配置目录
@@ -581,22 +1013,53 @@ SyslogIdentifier=snell-server
 WantedBy=multi-user.target
 EOF
 
+    if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
+        write_snell_netns_service
+        write_snell_socket_service_units "$PORT"
+    fi
+
     systemctl daemon-reload
     if [ $? -ne 0 ]; then
         echo -e "${RED}重载 Systemd 配置失败。${RESET}"
         exit 1
     fi
 
-    systemctl enable snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}开机自启动 Snell 失败。${RESET}"
-        exit 1
-    fi
+    if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
+        systemctl enable snell-netns
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}启用 snell-netns 失败。${RESET}"
+            exit 1
+        fi
 
-    systemctl start snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}启动 Snell 服务失败。${RESET}"
-        exit 1
+        systemctl start snell-netns
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}启动 snell-netns 失败。${RESET}"
+            exit 1
+        fi
+
+        if ! start_egress_runtime "$PORT"; then
+            exit 1
+        fi
+
+        echo -e "${GREEN}snell.socket 已启动，snell 服务将按需拉起（首次连接触发）${RESET}"
+        echo -e "${YELLOW}建议客户端优先使用 version = 4（v5 的 QUIC/UDP 依赖更高）。${RESET}"
+    else
+        systemctl stop snell.socket 2>/dev/null
+        systemctl disable snell.socket 2>/dev/null
+        systemctl stop snell-netns 2>/dev/null
+        systemctl disable snell-netns 2>/dev/null
+
+        systemctl enable snell
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}开机自启动 Snell 失败。${RESET}"
+            exit 1
+        fi
+
+        systemctl start snell
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}启动 Snell 服务失败。${RESET}"
+            exit 1
+        fi
     fi
 
     # 开放端口
@@ -605,6 +1068,10 @@ EOF
     # 在安装完成后输出配置信息
     echo -e "\n${GREEN}安装完成！以下是您的配置信息：${RESET}"
     echo -e "${CYAN}--------------------------------${RESET}"
+    if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
+        echo -e "${YELLOW}出口控制: 已启用（接口 ${EGRESS_IFACE}，命名空间 ${EGRESS_NS}）${RESET}"
+        echo -e "${YELLOW}Socket 激活: snell.socket${RESET}"
+    fi
     echo -e "${YELLOW}监听端口: ${PORT}${RESET}"
     echo -e "${YELLOW}PSK 密钥: ${PSK}${RESET}"
     echo -e "${YELLOW}IPv6: true${RESET}"
@@ -692,6 +1159,118 @@ EOFSCRIPT
     fi
 }
 
+# 已安装 Snell v5/v6 的出口控制管理
+configure_v5_egress_control() {
+    echo -e "${CYAN}=============== v5/v6 出口控制设置 ===============${RESET}"
+
+    if ! command -v snell-server &> /dev/null; then
+        echo -e "${RED}未检测到 Snell，请先安装。${RESET}"
+        return 1
+    fi
+
+    local installed_version
+    installed_version=$(detect_installed_snell_version)
+    if [ "$installed_version" != "v5" ] && [ "$installed_version" != "v6" ]; then
+        echo -e "${YELLOW}当前安装版本为 ${installed_version}，仅 Snell v5/v6 支持此设置。${RESET}"
+        return 1
+    fi
+
+    local main_port
+    main_port=$(get_snell_port)
+    if [ -z "$main_port" ]; then
+        echo -e "${RED}未找到主配置端口，请检查 ${SNELL_CONF_FILE}${RESET}"
+        return 1
+    fi
+
+    local egress_enabled="false"
+    if systemctl is-enabled snell.socket &> /dev/null || systemctl is-active snell.socket &> /dev/null; then
+        egress_enabled="true"
+    fi
+
+    echo -e "${GREEN}当前版本: Snell v5${RESET}"
+    echo -e "${GREEN}主端口: ${main_port}${RESET}"
+    if [ "$egress_enabled" = "true" ]; then
+        echo -e "${YELLOW}当前出口控制状态: 已启用${RESET}"
+    else
+        echo -e "${YELLOW}当前出口控制状态: 未启用${RESET}"
+    fi
+
+    echo -e "${GREEN}1.${RESET} 启用/更新 出口控制"
+    echo -e "${GREEN}2.${RESET} 关闭 出口控制（恢复传统模式）"
+    echo -e "${GREEN}0.${RESET} 返回"
+    read -rp "请输入选项 [0-2]: " egress_manage_choice
+
+    case "$egress_manage_choice" in
+        1)
+            EGRESS_FEATURE_ENABLED="true"
+            get_egress_settings
+            check_egress_dependencies
+
+            write_snell_netns_service
+            write_snell_socket_service_units "$main_port"
+
+            systemctl daemon-reload
+            if ! systemctl enable snell-netns; then
+                echo -e "${RED}启用 snell-netns 失败。${RESET}"
+                return 1
+            fi
+            if ! systemctl start snell-netns; then
+                echo -e "${RED}启动 snell-netns 失败，请执行: systemctl status snell-netns.service${RESET}"
+                return 1
+            fi
+
+            if ! start_egress_runtime "$main_port"; then
+                return 1
+            fi
+
+            echo -e "${GREEN}已应用出口控制（接口 ${EGRESS_IFACE}，命名空间 ${EGRESS_NS}）。${RESET}"
+            echo -e "${YELLOW}建议客户端优先使用 version = 4（v5 的 QUIC/UDP 依赖更高）。${RESET}"
+            echo -e "${YELLOW}说明：snell.socket 已监听，snell.service 将在首次连接时自动启动。${RESET}"
+            ;;
+        2)
+            systemctl stop snell.socket 2>/dev/null
+            systemctl disable snell.socket 2>/dev/null
+            systemctl stop snell-netns 2>/dev/null
+            systemctl disable snell-netns 2>/dev/null
+
+            cat > ${SYSTEMD_SERVICE_FILE} << EOF
+[Unit]
+Description=Snell Proxy Service (Main)
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+LimitNOFILE=32768
+ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+            rm -f ${SYSTEMD_SOCKET_FILE}
+            rm -f ${SYSTEMD_NETNS_FILE}
+
+            systemctl daemon-reload
+            systemctl enable snell
+            systemctl restart snell
+
+            echo -e "${GREEN}已关闭出口控制，恢复传统模式。${RESET}"
+            ;;
+        0)
+            echo -e "${CYAN}已返回。${RESET}"
+            ;;
+        *)
+            echo -e "${RED}请输入正确的选项 [0-2]${RESET}"
+            ;;
+    esac
+}
+
 # 只更新 Snell 二进制文件，不覆盖配置
 update_snell_binary() {
     echo -e "${CYAN}=============== Snell 更新 ===============${RESET}"
@@ -715,7 +1294,7 @@ update_snell_binary() {
 
     echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
     
-    # v4 和 v5 版本都使用 zip 格式，统一处理
+    # v4/v5/v6 均使用 zip 格式，统一处理
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
@@ -771,6 +1350,10 @@ uninstall_snell() {
     # 停止并禁用主服务
     systemctl stop snell
     systemctl disable snell
+    systemctl stop snell.socket 2>/dev/null
+    systemctl disable snell.socket 2>/dev/null
+    systemctl stop snell-netns 2>/dev/null
+    systemctl disable snell-netns 2>/dev/null
 
     # 停止并禁用所有多用户服务
     if [ -d "${SNELL_CONF_DIR}/users" ]; then
@@ -789,6 +1372,10 @@ uninstall_snell() {
 
     # 删除服务文件
     rm -f /lib/systemd/system/snell.service
+    rm -f ${SYSTEMD_SERVICE_FILE}
+    rm -f ${SYSTEMD_SOCKET_FILE}
+    rm -f ${SYSTEMD_NETNS_FILE}
+    rm -f ${NETNS_SETUP_SCRIPT}
 
     # 删除可执行文件和配置目录
     rm -f /usr/local/bin/snell-server
@@ -805,6 +1392,12 @@ uninstall_snell() {
 restart_snell() {
     echo -e "${YELLOW}正在重启所有 Snell 服务...${RESET}"
     
+    # 若使用 socket activation，先重启 socket 与 netns，再重启服务
+    if systemctl list-unit-files | grep -q '^snell.socket'; then
+        systemctl restart snell-netns 2>/dev/null
+        systemctl restart snell.socket 2>/dev/null
+    fi
+
     # 重启主服务
     systemctl restart snell
     if [ $? -eq 0 ]; then
@@ -844,7 +1437,15 @@ check_and_show_status() {
         local total_snell_cpu=0
         
         # 检查主服务状态
+        local main_available=false
         if systemctl is-active snell &> /dev/null; then
+            main_available=true
+        elif systemctl is-active snell.socket &> /dev/null; then
+            # socket activation 场景下，服务可能按需拉起
+            main_available=true
+        fi
+
+        if [ "$main_available" = "true" ]; then
             user_count=$((user_count + 1))
             running_count=$((running_count + 1))
             
@@ -1070,7 +1671,9 @@ view_snell_config() {
             echo -e "  - 版本：3"
             echo -e "\n${GREEN}Surge 配置格式：${RESET}"
             if [ ! -z "$IPV4_ADDR" ]; then
-                if [ "$snell_version" = "v5" ]; then
+                if [ "$snell_version" = "v6" ]; then
+                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 6, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                elif [ "$snell_version" = "v5" ]; then
                     echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                     echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                 else
@@ -1078,7 +1681,9 @@ view_snell_config() {
                 fi
             fi
             if [ ! -z "$IPV6_ADDR" ]; then
-                if [ "$snell_version" = "v5" ]; then
+                if [ "$snell_version" = "v6" ]; then
+                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 6, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                elif [ "$snell_version" = "v5" ]; then
                     echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                     echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                 else
@@ -1096,18 +1701,18 @@ view_snell_config() {
 
 # 获取当前安装的 Snell 版本
 get_current_snell_version() {
-    # 检测当前安装的 Snell 版本
     local current_installed_version=$(detect_installed_snell_version)
-    
-    if [ "$current_installed_version" = "v5" ]; then
-        # v5 版本获取完整版本号
+
+    if [ "$current_installed_version" = "v6" ] || [ "$current_installed_version" = "v5" ]; then
         CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+[a-z0-9]*')
         if [ -z "$CURRENT_VERSION" ]; then
-            # 如果无法获取，使用默认的 v5 版本
-            CURRENT_VERSION="v5.0.0b3"
+            if [ "$current_installed_version" = "v6" ]; then
+                CURRENT_VERSION="v6.0.0b2"
+            else
+                CURRENT_VERSION="v5.0.1"
+            fi
         fi
     else
-        # v4 版本获取完整版本号
         CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+')
         if [ -z "$CURRENT_VERSION" ]; then
             echo -e "${RED}无法获取当前 Snell 版本。${RESET}"
@@ -1131,15 +1736,16 @@ check_snell_update() {
     
     # 根据当前版本确定更新策略
     if [ "$current_installed_version" = "v4" ]; then
-        # v4 用户：询问是否升级到 v5
-        echo -e "\n${CYAN}检测到您当前使用的是 Snell v4，是否要升级到 v5？${RESET}"
-        echo -e "${YELLOW}注意：v5 为测试版本，可能存在兼容性问题${RESET}"
+        # v4 用户：可升级到 v5 或 v6，或继续检查 v4 更新
+        echo -e "\n${CYAN}检测到您当前使用的是 Snell v4，请选择目标版本：${RESET}"
+        echo -e "${YELLOW}注意：v5/v6 为新版本，升级前请确认客户端支持${RESET}"
         echo -e "${GREEN}1.${RESET} 升级到 Snell v5"
-        echo -e "${GREEN}2.${RESET} 继续使用 Snell v4（检查 v4 更新）"
-        echo -e "${GREEN}3.${RESET} 取消更新"
-        
+        echo -e "${GREEN}2.${RESET} 升级到 Snell v6 (Beta)"
+        echo -e "${GREEN}3.${RESET} 继续使用 Snell v4（检查 v4 更新）"
+        echo -e "${GREEN}4.${RESET} 取消更新"
+
         while true; do
-            read -rp "请选择 [1-3]: " upgrade_choice
+            read -rp "请选择 [1-4]: " upgrade_choice
             case "$upgrade_choice" in
                 1)
                     SNELL_VERSION_CHOICE="v5"
@@ -1147,8 +1753,44 @@ check_snell_update() {
                     break
                     ;;
                 2)
+                    SNELL_VERSION_CHOICE="v6"
+                    echo -e "${GREEN}已选择升级到 Snell v6 (Beta)${RESET}"
+                    echo -e "${YELLOW}注意：v6 Beta 版协议可能存在不兼容更新，且已移除 QUIC 代理模式${RESET}"
+                    break
+                    ;;
+                3)
                     SNELL_VERSION_CHOICE="v4"
                     echo -e "${GREEN}已选择继续使用 Snell v4${RESET}"
+                    break
+                    ;;
+                4)
+                    echo -e "${CYAN}已取消更新${RESET}"
+                    return 0
+                    ;;
+                *)
+                    echo -e "${RED}请输入正确的选项 [1-4]${RESET}"
+                    ;;
+            esac
+        done
+    elif [ "$current_installed_version" = "v5" ]; then
+        # v5 用户：可升级到 v6 或继续检查 v5 更新
+        echo -e "\n${CYAN}检测到您当前使用的是 Snell v5，请选择目标版本：${RESET}"
+        echo -e "${GREEN}1.${RESET} 升级到 Snell v6 (Beta)"
+        echo -e "${GREEN}2.${RESET} 继续使用 Snell v5（检查 v5 更新）"
+        echo -e "${GREEN}3.${RESET} 取消更新"
+
+        while true; do
+            read -rp "请选择 [1-3]: " upgrade_choice
+            case "$upgrade_choice" in
+                1)
+                    SNELL_VERSION_CHOICE="v6"
+                    echo -e "${GREEN}已选择升级到 Snell v6 (Beta)${RESET}"
+                    echo -e "${YELLOW}注意：v6 Beta 版协议可能存在不兼容更新，且已移除 QUIC 代理模式${RESET}"
+                    break
+                    ;;
+                2)
+                    SNELL_VERSION_CHOICE="v5"
+                    echo -e "${GREEN}已选择继续使用 Snell v5${RESET}"
                     break
                     ;;
                 3)
@@ -1161,9 +1803,9 @@ check_snell_update() {
             esac
         done
     else
-        # v5 用户：直接检查 v5 更新，无需用户选择
-        SNELL_VERSION_CHOICE="v5"
-        echo -e "${GREEN}当前为 Snell v5，将检查 v5 更新${RESET}"
+        # v6 用户：直接检查 v6 更新
+        SNELL_VERSION_CHOICE="v6"
+        echo -e "${GREEN}当前为 Snell v6，将检查 v6 更新${RESET}"
     fi
     
     # 获取最新版本信息
@@ -1347,7 +1989,7 @@ setup_multi_user() {
 show_menu() {
     clear
     echo -e "${CYAN}============================================${RESET}"
-    echo -e "${CYAN}          Snell 管理脚本 v${current_version}${RESET}"
+    echo -e "${CYAN}        Snell 管理脚本 v${current_version} (支持v4/v5/v6)${RESET}"
     echo -e "${CYAN}============================================${RESET}"
     echo -e "${GREEN}作者: jinqian${RESET}"
     echo -e "${GREEN}网站：https://jinqians.com${RESET}"
@@ -1371,10 +2013,11 @@ show_menu() {
     echo -e "${GREEN}8.${RESET} 更新Snell"
     echo -e "${GREEN}9.${RESET} 更新脚本"
     echo -e "${GREEN}10.${RESET} 查看服务状态"
+    echo -e "${GREEN}11.${RESET} Snell v5/v6 出口控制设置"
     echo -e "${GREEN}0.${RESET} 退出脚本"
     
     echo -e "${CYAN}============================================${RESET}"
-    read -rp "请输入选项 [0-10]: " num
+    read -rp "请输入选项 [0-11]: " num
 }
 
 #开启bbr
@@ -1471,12 +2114,16 @@ while true; do
             check_and_show_status
             read -p "按任意键继续..."
             ;;
+        11)
+            configure_v5_egress_control
+            read -p "按任意键继续..."
+            ;;
         0)
             echo -e "${GREEN}感谢使用，再见！${RESET}"
             exit 0
             ;;
         *)
-            echo -e "${RED}请输入正确的选项 [0-10]${RESET}"
+            echo -e "${RED}请输入正确的选项 [0-11]${RESET}"
             ;;
     esac
     echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"
