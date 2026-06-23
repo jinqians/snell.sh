@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="4.7"
+current_version="4.8"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -1082,16 +1082,16 @@ EOF
     echo -e "\n${GREEN}服务器地址信息：${RESET}"
     
     # 获取 IPv4 地址
-    IPV4_ADDR=$(curl -s4 https://api.ipify.org)
+    IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+        IP_COUNTRY_IPV4=$(curl -s --connect-timeout 5 --max-time 10 http://ipinfo.io/${IPV4_ADDR}/country)
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
-    
+
     # 获取 IPv6 地址
-    IPV6_ADDR=$(curl -s6 https://api64.ipify.org)
+    IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+        IP_COUNTRY_IPV6=$(curl -s --connect-timeout 5 --max-time 10 https://ipapi.co/${IPV6_ADDR}/country/)
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
@@ -1565,19 +1565,19 @@ view_snell_config() {
     fi
     
     # 获取 IPv4 地址
-    IPV4_ADDR=$(curl -s4 https://api.ipify.org)
+    IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+        IP_COUNTRY_IPV4=$(curl -s --connect-timeout 5 --max-time 10 http://ipinfo.io/${IPV4_ADDR}/country)
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
-    
+
     # 获取 IPv6 地址
-    IPV6_ADDR=$(curl -s6 https://api64.ipify.org)
+    IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+        IP_COUNTRY_IPV6=$(curl -s --connect-timeout 5 --max-time 10 https://ipapi.co/${IPV6_ADDR}/country/)
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
-    
+
     # 检查是否获取到 IP 地址
     if [ -z "$IPV4_ADDR" ] && [ -z "$IPV6_ADDR" ]; then
         echo -e "${RED}无法获取到公网 IP 地址，请检查网络连接。${RESET}"
