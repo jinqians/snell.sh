@@ -37,15 +37,22 @@ bash <(curl -L -s menu.jinqians.com)
 ```
 
 ## 可自行根据系统选择
-### Debian/Ubuntu安装
+#### Debian/Ubuntu安装
 ```bash
 bash <(curl -L -s snell.jinqians.com)
 ```
-### CentOS安装
+#### CentOS安装
 ```bash
 bash <(curl -L -s snell-centos.jinqians.com)
 ```
-### Alpine (推荐Docker 安装)
+#### Alpine 安装(本地构建)
+```bash
+sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
+```
+#### Alpine 3.18安装
+```bash
+sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
+```
 #### Docker
 ```bash
 docker run -d --name snell-server \
@@ -73,14 +80,51 @@ services:
     volumes:
       - ./snell-config:/etc/snell
 ```
-#### Alpine 安装(本地构建Docker容器)
-```bash
-sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"
+</details>
+
+## 流量管理
+
+<details>
+   <summary>流量管理说明[展开查看]</summary>
+
+### 功能说明
+通过 iptables 对 Snell 节点进行流量计数，支持设置月度流量上限，超限后自动暂停节点，每月指定日期自动重置。
+
+### 计量原理
+Snell 以明文 TCP 监听在指定端口，流量管理通过在 iptables 中添加专用计数规则（`PSM_TRF` 链）统计该端口的进出字节数，不影响数据包的正常转发。超限时向 `INPUT` 链插入 DROP 规则，阻断新连接。
+
 ```
-#### Alpine 3.18安装
-```bash
-sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"
+客户端 ──TCP──▶ iptables 计数 ──▶ snell-server
+                     │
+                   超限时 DROP
 ```
+
+### 使用方式
+在管理菜单中选择 **9. 流量管理**，进入交互向导：
+
+```
+1. 添加 / 修改流量限制   → 选择节点，设置上限 (GB) 和每月重置日
+2. 查看流量状态         → 显示各节点已用流量、剩余、暂停状态
+3. 手动暂停节点         → 立即阻断指定节点的新连接
+4. 手动恢复节点         → 移除 DROP 规则，恢复正常访问
+5. 重置流量统计         → 清零计数，并恢复被暂停的节点
+```
+
+### 自动检查定时器
+首次配置后会提示安装 systemd 定时器（`psm-traffic.timer`），每分钟执行一次检查：
+- 累计流量 ≥ 限额 → 自动暂停节点
+- 到达重置日 → 清零计数并恢复节点
+
+手动查看定时器状态：
+```bash
+systemctl status psm-traffic.timer
+```
+
+### 注意事项
+- 流量计数基于 iptables 字节计数器，**服务器重启后计数器归零**，但已累计的流量数据保存在 `/etc/psm/traffic/state.json` 中，下次计数从断点续计
+- 暂停节点仅阻断**新连接**，已建立的 TCP 连接会在自然断开后失效
+- 若系统使用 nftables，需确认 iptables 兼容层已启用（`iptables-legacy` 或 `iptables-nft`）
+- Snell 使用 TCP，流量计数不包含 UDP
 
 </details>
 

@@ -404,7 +404,7 @@ show_menu() {
     
     echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
     echo -e "${GREEN}8.${RESET} 更新脚本"
-    echo -e "${GREEN}9.${RESET} 流量管理(请勿使用，功能不完善)"
+    echo -e "${GREEN}9.${RESET} 流量管理（推荐使用 PSM 管理）"
     echo -e "${GREEN}0.${RESET} 退出"
     
     echo -e "${CYAN}============================================${RESET}"
@@ -449,7 +449,15 @@ while true; do
             update_script
             ;;
         9)
-            bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/traffic.sh)
+            echo -e "\n${YELLOW}=== 流量管理 ===${RESET}"
+            echo -e "本脚本内置的流量管理功能尚不完善，推荐使用 ${GREEN}PSM（Proxy Stack Manager）${RESET} 进行流量管理。"
+            echo -e "\nPSM 支持 Snell / SS2022 / Xray 等协议的统一流量限额管理，功能包括："
+            echo -e "  • 设置月度流量上限（GB）及自动重置日"
+            echo -e "  • 超限自动暂停节点，恢复后自动解封"
+            echo -e "  • iptables 精确计数，数据持久化保存"
+            echo -e "\n安装 PSM："
+            echo -e "  ${CYAN}bash <(curl -fsSL https://psm.jinqians.com)${RESET}"
+            echo -e "\n进入 PSM 后选择：${GREEN}15. 流量管理${RESET} 即可添加 Snell 节点并配置限额。"
             read -p "按任意键继续..."
             ;;
         0)
