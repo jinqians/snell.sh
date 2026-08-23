@@ -156,17 +156,3 @@ jobs:
             BUILD_CREATED=${{ github.event.repository.updated_at }}
           cache-from: type=gha,scope=${{ matrix.channel }}
           cache-to: type=gha,mode=max,scope=${{ matrix.channel }}
-
-  # 把仓库 README 同步为 Docker Hub 的仓库描述
-  description:
-    needs: build
-    if: always() && needs.build.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: peter-evans/dockerhub-description@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: jinqians/snell-server
-          readme-filepath: ./README.md
