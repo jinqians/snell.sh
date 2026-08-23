@@ -1,0 +1,172 @@
+name: Build and push to Docker Hub
+
+# 触发方式：
+#   1. 手动触发（可指定版本、可强制重建）
+#   2. 每周一 03:00 UTC 自动检查 Snell 上游是否发布新版本
+#   3. 推送 v* tag 时构建
+on:
+  workflow_dispatch:
+    inputs:
+      channels:
+        description: "要构建的通道，逗号分隔（v4,v5,v6）"
+        required: false
+        default: "v4,v5,v6"
+      force:
+        description: "即使 Docker Hub 已有该版本标签也重新构建"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: "0 3 * * 1"
+  push:
+    tags:
+      - "v*"
+
+env:
+  IMAGE_NAME: jinqians/snell-server
+  SHADOWTLS_VERSION: v0.2.25
+  # latest 标签跟随哪个通道
+  LATEST_CHANNEL: v5
+
+jobs:
+  # 解析上游最新版本，并跳过 Docker Hub 上已存在的版本
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      has_work: ${{ steps.resolve.outputs.has_work }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest Snell versions
+        id: resolve
+        env:
+          CHANNELS: ${{ github.event.inputs.channels || 'v4,v5,v6' }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          set -euo pipefail
+
+          NOTES_URL="https://kb.nssurge.com/surge-knowledge-base/release-notes/snell"
+          NOTES=$(curl -sfL --max-time 30 "$NOTES_URL")
+
+          # 与 snell.sh 相同的排序键：beta < rc < 正式版
+          sort_key() {
+            echo "${1#v}" | awk '{
+              ver = $0; suffix = ""
+              if (match(ver, /[a-zA-Z]+[0-9]*$/)) {
+                suffix = tolower(substr(ver, RSTART)); ver = substr(ver, 1, RSTART - 1)
+              }
+              split(ver, part, ".")
+              stage = 3; seq = 0
+              if (suffix != "") {
+                stage = (suffix ~ /^rc/) ? 2 : 1
+                digits = suffix; gsub(/[^0-9]/, "", digits)
+                if (digits != "") seq = digits + 0
+              }
+              printf "%03d.%03d.%03d.%d.%04d", part[1], part[2], part[3], stage, seq
+            }'
+          }
+
+          pick_latest() {
+            echo "$NOTES" \
+              | grep -oE "snell-server-v$1\.[0-9]+\.[0-9]+[a-zA-Z0-9]*" \
+              | sed 's/^snell-server-v//' | sort -u \
+              | while read -r v; do echo "$(sort_key "$v") $v"; done \
+              | sort | tail -n 1 | awk '{print $2}'
+          }
+
+          # 查询 Docker Hub 上标签是否已存在
+          tag_exists() {
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/$1")
+            [ "$code" = "200" ]
+          }
+
+          entries=""
+          for channel in $(echo "$CHANNELS" | tr ',' ' '); do
+            major="${channel#v}"
+            version="v$(pick_latest "$major")"
+            if [ "$version" = "v" ]; then
+              echo "::warning::无法解析 ${channel} 版本，已跳过"
+              continue
+            fi
+
+            if [ "$FORCE" != "true" ] && tag_exists "$version"; then
+              echo "${channel}: ${version} 已存在于 Docker Hub，跳过"
+              continue
+            fi
+
+            # v6 上游未提供 armv7l 构建
+            if [ "$channel" = "v6" ]; then
+              platforms="linux/amd64,linux/arm64"
+            else
+              platforms="linux/amd64,linux/arm64,linux/arm/v7"
+            fi
+
+            tags="${IMAGE_NAME}:${version},${IMAGE_NAME}:${channel}"
+            if [ "$channel" = "${LATEST_CHANNEL}" ]; then
+              tags="${tags},${IMAGE_NAME}:latest"
+            fi
+
+            echo "${channel}: 将构建 ${version} (${platforms})"
+            entries="${entries}{\"channel\":\"${channel}\",\"version\":\"${version}\",\"platforms\":\"${platforms}\",\"tags\":\"${tags}\"},"
+          done
+
+          if [ -z "$entries" ]; then
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+            echo "没有需要构建的版本"
+            exit 0
+          fi
+
+          echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":[${entries%,}]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 多架构构建需要 QEMU 模拟 arm64 / armv7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.channel }} (${{ matrix.version }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platforms }}
+          push: true
+          provenance: false
+          tags: ${{ matrix.tags }}
+          build-args: |
+            SNELL_VERSION=${{ matrix.version }}
+            SNELL_VER=${{ matrix.channel }}
+            SHADOWTLS_VERSION=${{ env.SHADOWTLS_VERSION }}
+            BUILD_CREATED=${{ github.event.repository.updated_at }}
+          cache-from: type=gha,scope=${{ matrix.channel }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.channel }}
+
+  # 把仓库 README 同步为 Docker Hub 的仓库描述
+  description:
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: jinqians/snell-server
+          readme-filepath: ./README.md
