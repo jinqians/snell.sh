@@ -38,7 +38,28 @@ if [ ! -f "$CONFIG_FILE" ]; then
     # Snell 版本: v4/v5/v6 配置有差异
     SNELL_VER="${SNELL_VER:-v4}"
 
-    if [ "$SNELL_VER" = "v5" ]; then
+    if [ "$SNELL_VER" = "v6" ]; then
+        # v6: ipv6 参数已废弃，改用 mode / dns-ip-preference
+        SNELL_MODE="${SNELL_MODE:-default}"
+        DNS_IP_PREFERENCE="${SNELL_DNS_IP_PREFERENCE:-}"
+        if [ -z "$DNS_IP_PREFERENCE" ]; then
+            case "${SNELL_IPV6:-true}" in
+                0|false|FALSE|no|NO|off|OFF) DNS_IP_PREFERENCE="ipv4-only" ;;
+                *) DNS_IP_PREFERENCE="default" ;;
+            esac
+        fi
+        cat > "$CONFIG_FILE" << CONF
+[snell-server]
+listen = ${SNELL_LISTEN_HOST:-0.0.0.0}:${SNELL_PORT}
+psk = ${SNELL_PSK}
+mode = ${SNELL_MODE}
+dns-ip-preference = ${DNS_IP_PREFERENCE}
+CONF
+        if [ -n "${SNELL_DNS:-}" ]; then
+            echo "dns = ${SNELL_DNS}" >> "$CONFIG_FILE"
+        fi
+        echo "提示: 客户端需配置 version = 6 且 mode = ${SNELL_MODE}"
+    elif [ "$SNELL_VER" = "v5" ]; then
         cat > "$CONFIG_FILE" << CONF
 [snell-server]
 listen = ${SNELL_LISTEN_HOST:-0.0.0.0}:${SNELL_PORT}

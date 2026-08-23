@@ -42,10 +42,10 @@ Docker Hub 镜像：`jinqians/snell-server`
 | `latest` | Snell v5.0.1 | 固定指向 v5，不指向 v6 |
 | `v4` | Snell v4.1.1 | v4 当前推荐版本 |
 | `v5` | Snell v5.0.1 | v5 当前推荐版本 |
-| `v6` | Snell v6.0.0b4 | v6 当前 Beta 版本 |
+| `v6` | Snell v6.0.0rc2 | v6 当前 RC 版本 |
 | `v4.0.0` / `v4.0.1` / `v4.1.0` / `v4.1.1` | Snell v4 | 固定版本标签 |
 | `v5.0.0` / `v5.0.1` | Snell v5 | 固定版本标签 |
-| `v6.0.0b1` / `v6.0.0b2` / `v6.0.0b3` / `v6.0.0b4` | Snell v6 beta | 固定版本标签 |
+| `v6.0.0b1` … `v6.0.0b4` / `v6.0.0rc` / `v6.0.0rc2` | Snell v6 预发布 | 固定版本标签 |
 
 架构支持：
 - v4 / v5: `linux/amd64`、`linux/arm64`、`linux/arm/v7`
@@ -166,8 +166,11 @@ docker compose down
 | `SNELL_PORT` | `6160` | Snell 后端监听端口 |
 | `SNELL_PSK` | 自动生成 | Snell PSK |
 | `SNELL_LISTEN_HOST` | `0.0.0.0` | Snell 监听地址；搭配 ShadowTLS 时使用 `127.0.0.1` |
-| `SNELL_IPV6` | `true` | v4 / v6 配置项 |
-| `SNELL_TFO` | `true` | v4 / v6 配置项 |
+| `SNELL_IPV6` | `true` | v4 配置项；v6 下会转换为 `dns-ip-preference`（`false` → `ipv4-only`） |
+| `SNELL_TFO` | `true` | v4 配置项，v6 已不再使用 |
+| `SNELL_MODE` | `default` | 仅 v6：加密模式 `default` / `unshaped` / `unsafe-raw`，客户端需一致 |
+| `SNELL_DNS_IP_PREFERENCE` | 跟随 `SNELL_IPV6` | 仅 v6：`default` / `prefer-ipv4` / `prefer-ipv6` / `ipv4-only` / `ipv6-only` |
+| `SNELL_DNS` | 未设置 | 仅 v6：自定义 DNS 服务器，多个用逗号分隔 |
 | `SHADOWTLS_ENABLE` | `0` | 设置为 `1` 启用 ShadowTLS |
 | `SHADOWTLS_PORT` | `8443` | ShadowTLS 对外监听端口 |
 | `SHADOWTLS_PASSWORD` | 自动生成 | ShadowTLS 密码，会保存到 `/etc/snell/shadowtls-password` |
@@ -220,15 +223,23 @@ USE_BUILDX=1 PUSH=1 ./build-docker-images.sh
 
 Snell 协议是由 Surge 团队设计的一种轻量级、高效的加密代理协议，专注于提供安全、快速的网络传输服务。该协议通过简洁的设计和加密技术，满足用户对隐私保护和高性能传输的需求。
 
-### Snell v4 vs v5 对比
+### Snell v4 / v5 / v6 对比
 
-| 特性 | Snell v4 | Snell v5 |
-|------|----------|----------|
-| 状态 | 稳定版 | 最新版 |
-| 安全性 | 支持 | 支持 |
-| QUIC Proxy | 不支持 | 支持 |
-| Dynamic Record Sizing | 不支持 | 支持 |
-| 出口控制 | 不支持 | 支持 |
+| 特性 | Snell v4 | Snell v5 | Snell v6 (RC) |
+|------|----------|----------|---------------|
+| 状态 | 稳定版 | 稳定版 | 预发布（rc2） |
+| QUIC Proxy | 不支持 | 支持 | 已移除 |
+| Dynamic Record Sizing | 不支持 | 支持 | 支持 |
+| 出口控制 (egress-interface) | 不支持 | 支持 | 支持 |
+| 部署级协议多样性 | 不支持 | 不支持 | 支持（PSK 派生） |
+| 加密模式 mode | 不支持 | 不支持 | `default` / `unshaped` / `unsafe-raw` |
+| obfs 混淆 | 支持 `http` | 支持 `http` | 已移除 |
+| `ipv6` 参数 | 支持 | 支持 | 已废弃，改用 `dns-ip-preference` |
+| 多地址监听 | 不支持 | 不支持 | 支持（`listen` 逗号分隔） |
+| armv7l 构建 | 提供 | 提供 | 不提供 |
+
+> v6 服务端与客户端的 `mode` 必须一致，Surge 侧配置示例：
+> `节点名 = snell, 1.2.3.4, 6160, psk = xxx, version = 6, mode = default, reuse = true, tfo = true`
 
 ### ShadowTLS
 

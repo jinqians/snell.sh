@@ -23,6 +23,55 @@ SYSTEMD_DIR="/etc/systemd/system"
 SNELL_SERVICE_USER="snell"
 SNELL_SERVICE_GROUP="snell"
 
+# Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
+SNELL_MODE="default"
+
+# 检测当前安装的 Snell 版本
+detect_installed_snell_version() {
+    if command -v snell-server &> /dev/null; then
+        local version_output=$(snell-server --v 2>&1)
+        if echo "$version_output" | grep -q "v6"; then
+            echo "v6"
+        elif echo "$version_output" | grep -q "v5"; then
+            echo "v5"
+        else
+            echo "v4"
+        fi
+    else
+        echo "unknown"
+    fi
+}
+
+# 读取主配置中的 mode（v6），读不到时回落到默认值
+get_snell_mode() {
+    local mode=""
+    if [ -f "$SNELL_CONF_FILE" ]; then
+        mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+    fi
+    if [ -z "$mode" ]; then
+        mode="$SNELL_MODE"
+    fi
+    echo "$mode"
+}
+
+# 输出单条 Surge 配置（v6 需要带 mode）
+print_surge_line() {
+    local country="$1"
+    local ip_addr="$2"
+    local port="$3"
+    local psk="$4"
+    local installed_version="$5"
+
+    if [ "$installed_version" = "v6" ]; then
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 6, mode = $(get_snell_mode), reuse = true, tfo = true${RESET}"
+    elif [ "$installed_version" = "v5" ]; then
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
+    else
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+    fi
+}
+
 ensure_snell_service_user() {
     if ! getent group "${SNELL_SERVICE_GROUP}" >/dev/null 2>&1; then
         groupadd --system "${SNELL_SERVICE_GROUP}" 2>/dev/null || true
@@ -295,18 +344,33 @@ add_user() {
     local ipv6_enable="true"
     local listen_addr="::0"
     local main_conf="${SNELL_CONF_DIR}/users/snell-main.conf"
-    if [ -f "$main_conf" ] && grep -Eq '^[[:space:]]*ipv6[[:space:]]*=[[:space:]]*false' "$main_conf"; then
+    if [ -f "$main_conf" ] && { grep -Eq '^[[:space:]]*ipv6[[:space:]]*=[[:space:]]*false' "$main_conf" \
+        || grep -Eq '^[[:space:]]*dns-ip-preference[[:space:]]*=[[:space:]]*ipv4-only' "$main_conf"; }; then
         ipv6_enable="false"
         listen_addr="0.0.0.0"
     fi
+
+    local installed_version
+    installed_version=$(detect_installed_snell_version)
+
     local user_conf="${SNELL_CONF_DIR}/users/snell-${PORT}.conf"
-    cat > "$user_conf" << EOF
-[snell-server]
-listen = ${listen_addr}:${PORT}
-psk = ${PSK}
-ipv6 = ${ipv6_enable}
-dns = ${DNS}
-EOF
+    # v6 使用 mode / dns-ip-preference，ipv6 参数在 v6 已废弃
+    {
+        echo "[snell-server]"
+        echo "listen = ${listen_addr}:${PORT}"
+        echo "psk = ${PSK}"
+        if [ "$installed_version" = "v6" ]; then
+            echo "mode = $(get_snell_mode)"
+            if [ "$ipv6_enable" = "false" ]; then
+                echo "dns-ip-preference = ipv4-only"
+            else
+                echo "dns-ip-preference = default"
+            fi
+        else
+            echo "ipv6 = ${ipv6_enable}"
+        fi
+        echo "dns = ${DNS}"
+    } > "$user_conf"
     
     # 创建用户服务文件
     local service_name="snell-${PORT}"
@@ -485,12 +549,17 @@ show_user_config() {
     if [ -f "$user_conf" ]; then
         local port=$(grep -E '^listen' "$user_conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
         local psk=$(grep -E '^psk' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
-        local dns=$(grep -E '^dns' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
-        
+        local dns=$(grep -E '^[[:space:]]*dns[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+        local mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+        local dns_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+        local installed_version=$(detect_installed_snell_version)
+
         echo -e "\n${GREEN}用户配置详情：${RESET}"
         echo -e "${CYAN}--------------------------------${RESET}"
         echo -e "${YELLOW}端口: ${port}${RESET}"
         echo -e "${YELLOW}PSK: ${psk}${RESET}"
+        [ -n "$mode" ] && echo -e "${YELLOW}模式 (mode): ${mode}${RESET}"
+        [ -n "$dns_pref" ] && echo -e "${YELLOW}DNS 解析偏好: ${dns_pref}${RESET}"
         echo -e "${YELLOW}DNS: ${dns}${RESET}"
         
         # 获取 IPv4 地址
@@ -498,7 +567,7 @@ show_user_config() {
         if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
             IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
             echo -e "\n${GREEN}IPv4 配置：${RESET}"
-            echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+            print_surge_line "$IP_COUNTRY_IPV4" "$IPV4_ADDR" "$port" "$psk" "$installed_version"
         fi
         
         # 获取 IPv6 地址
@@ -506,7 +575,7 @@ show_user_config() {
         if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
             IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
             echo -e "\n${GREEN}IPv6 配置：${RESET}"
-            echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+            print_surge_line "$IP_COUNTRY_IPV6" "$IPV6_ADDR" "$port" "$psk" "$installed_version"
         fi
         
         echo -e "${CYAN}--------------------------------${RESET}"

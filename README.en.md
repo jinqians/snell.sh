@@ -53,10 +53,10 @@ Docker Hub image tags:
 - `jinqians/snell-server:latest`: pinned to Snell v5.0.1, not v6
 - `jinqians/snell-server:v4`: current v4 tag, points to v4.1.1
 - `jinqians/snell-server:v5`: current v5 tag, points to v5.0.1
-- `jinqians/snell-server:v6`: current v6 beta tag, points to v6.0.0b4
+- `jinqians/snell-server:v6`: current v6 pre-release tag, points to v6.0.0rc2
 - Fixed v4 tags: `v4.0.0`, `v4.0.1`, `v4.1.0`, `v4.1.1`
 - Fixed v5 tags: `v5.0.0`, `v5.0.1`
-- Fixed v6 beta tags: `v6.0.0b1`, `v6.0.0b2`, `v6.0.0b3`, `v6.0.0b4`
+- Fixed v6 pre-release tags: `v6.0.0b1`, `v6.0.0b2`, `v6.0.0b3`, `v6.0.0b4`, `v6.0.0rc`, `v6.0.0rc2`
 
 Supported platforms:
 - v4/v5: `linux/amd64`, `linux/arm64`, `linux/arm/v7`
@@ -115,9 +115,14 @@ docker run -d --name snell-server \
   -p 6160:6160/udp \
   -e SNELL_PORT=6160 \
   -e SNELL_VER=v6 \
+  -e SNELL_MODE=default \
   -v ./snell-config:/etc/snell \
   jinqians/snell-server:v6
 ```
+
+v6-only environment variables: `SNELL_MODE` (`default` / `unshaped` / `unsafe-raw`, must match the client),
+`SNELL_DNS_IP_PREFERENCE` (`default` / `prefer-ipv4` / `prefer-ipv6` / `ipv4-only` / `ipv6-only`), and `SNELL_DNS`.
+`SNELL_IPV6=false` is translated to `dns-ip-preference = ipv4-only`; `SNELL_TFO` is ignored by v6.
 
 If you set `SNELL_PSK` manually, use at least 16 characters for v6 compatibility. v5 and v6 require both TCP and UDP port mappings. v4 only needs TCP, but keeping the UDP mapping is harmless.
 
@@ -273,7 +278,8 @@ USE_BUILDX=1 PUSH=1 ./build-docker-images.sh
 ## 🆕 New Version Features (v4.0)
 ### Snell Version Support
 - ✅ **Snell v4** - Stable version, recommended for production environments
-- ✅ **Snell v5** - Beta version, supports new features (QUIC Proxy, Dynamic Record Sizing, etc.)
+- ✅ **Snell v5** - Stable version, supports QUIC Proxy, Dynamic Record Sizing, egress control
+- ✅ **Snell v6 (RC)** - Deployment-level protocol diversity, `mode` setting, `dns-ip-preference`; QUIC Proxy and obfs removed
 - ✅ **Smart Version Detection** - Automatically detects currently installed Snell version
 - ✅ **Version Upgrade Choice** - Support upgrading from v4 to v5, or continue using v4
 
@@ -290,15 +296,24 @@ USE_BUILDX=1 PUSH=1 ./build-docker-images.sh
 
 Snell is a lightweight and efficient encrypted proxy protocol designed by the Surge team. It focuses on providing secure and fast network transmission through simple design and strong encryption to meet users' needs for privacy and performance.
 
-#### Snell v4 vs v5 Comparison
-| Feature | Snell v4 | Snell v5 |
-|---------|----------|----------|
-| Status | Stable | Beta |
-| Compatibility | Fully compatible | Backward compatible with v4 |
-| QUIC Proxy | ❌ | ✅ |
-| Dynamic Record Sizing | ❌ | ✅ |
-| Egress Control | ❌ | ✅ |
-| Production Use | ✅ Recommended | ⚠️ For testing |
+#### Snell v4 / v5 / v6 Comparison
+| Feature | Snell v4 | Snell v5 | Snell v6 (RC) |
+|---------|----------|----------|---------------|
+| Status | Stable | Stable | Pre-release (rc2) |
+| Compatibility | Fully compatible | Backward compatible with v4 | Client must use `version = 6` |
+| QUIC Proxy | ❌ | ✅ | Removed |
+| Dynamic Record Sizing | ❌ | ✅ | ✅ |
+| Egress Control (`egress-interface`) | ❌ | ✅ | ✅ |
+| Deployment-level protocol diversity | ❌ | ❌ | ✅ (PSK-derived) |
+| `mode` setting | ❌ | ❌ | `default` / `unshaped` / `unsafe-raw` |
+| obfs | `http` | `http` | Removed |
+| `ipv6` parameter | ✅ | ✅ | Deprecated, use `dns-ip-preference` |
+| Multi-address `listen` | ❌ | ❌ | ✅ (comma separated) |
+| armv7l build | ✅ | ✅ | ❌ |
+| Production Use | ✅ Recommended | ✅ Recommended | ⚠️ For testing |
+
+> Server and client `mode` must match. Surge example:
+> `Proxy = snell, 1.2.3.4, 6160, psk = xxx, version = 6, mode = default, reuse = true, tfo = true`
 
 ### ShadowTLS
 
