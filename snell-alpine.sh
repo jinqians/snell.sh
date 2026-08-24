@@ -37,6 +37,40 @@ OPENRC_SERVICE_FILE="/etc/init.d/snell"
 
 # --- 基础函数 ---
 
+# 查询 IP 所属国家代码（多接口回退，避免单一接口限流返回错误信息）
+get_ip_country() {
+    local target="$1"
+    local api=""
+    local raw=""
+    local result=""
+
+    if [ -z "$target" ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    for api in "http://ipinfo.io/${target}/country" \
+               "http://ip-api.com/line/${target}?fields=countryCode" \
+               "https://ipwho.is/${target}?fields=country_code" \
+               "https://ipapi.co/${target}/country/"; do
+        raw=$(curl -s --connect-timeout 5 --max-time 10 "$api" 2>/dev/null)
+        result=$(echo "$raw" | tr -d ' \t\r\n')
+        case "$result" in
+            [A-Za-z][A-Za-z]) ;;
+            *) result=$(echo "$raw" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n 1) ;;
+        esac
+        case "$result" in
+            [A-Za-z][A-Za-z])
+                echo "$result" | tr '[:lower:]' '[:upper:]'
+                return 0
+                ;;
+        esac
+    done
+
+    echo "Unknown"
+    return 1
+}
+
 check_root() {
     if [ "$(id -u)" != "0" ]; then
         echo -e "${RED}错误: 请以 root 权限运行此脚本。${RESET}"
@@ -557,7 +591,7 @@ show_information() {
     echo -e "${BLUE}============================================${RESET}"
 
     if [ -n "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s --connect-timeout 5 "http://ipinfo.io/${IPV4_ADDR}/country" 2>/dev/null)
+        IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${GREEN}--- IPv4 Surge 配置 (Snell ${INSTALLED_VERSION_CHOICE}) ---${RESET}"
         if [ "$INSTALLED_VERSION_CHOICE" = "v6" ]; then
             echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${PORT}, psk=${PSK}, version=6, mode=${INSTALLED_MODE}, reuse=true, tfo=true${RESET}"
@@ -570,7 +604,7 @@ show_information() {
     fi
 
     if [ -n "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s --connect-timeout 5 "https://ipapi.co/${IPV6_ADDR}/country/" 2>/dev/null)
+        IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "\n${GREEN}--- IPv6 Surge 配置 (Snell ${INSTALLED_VERSION_CHOICE}) ---${RESET}"
         if [ "$INSTALLED_VERSION_CHOICE" = "v6" ]; then
             echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${PORT}, psk=${PSK}, version=6, mode=${INSTALLED_MODE}, reuse=true, tfo=true${RESET}"

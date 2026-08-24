@@ -262,6 +262,40 @@ migrate_snell_conf_for_version() {
     } > "$tmp_conf" && mv "$tmp_conf" "$conf_file"
 }
 
+# 查询 IP 所属国家代码（多接口回退，避免单一接口限流返回错误信息）
+get_ip_country() {
+    local target="$1"
+    local api=""
+    local raw=""
+    local result=""
+
+    if [ -z "$target" ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    for api in "http://ipinfo.io/${target}/country" \
+               "http://ip-api.com/line/${target}?fields=countryCode" \
+               "https://ipwho.is/${target}?fields=country_code" \
+               "https://ipapi.co/${target}/country/"; do
+        raw=$(curl -s --connect-timeout 5 --max-time 10 "$api" 2>/dev/null)
+        result=$(echo "$raw" | tr -d ' \t\r\n')
+        case "$result" in
+            [A-Za-z][A-Za-z]) ;;
+            *) result=$(echo "$raw" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n 1) ;;
+        esac
+        case "$result" in
+            [A-Za-z][A-Za-z])
+                echo "$result" | tr '[:lower:]' '[:upper:]'
+                return 0
+                ;;
+        esac
+    done
+
+    echo "Unknown"
+    return 1
+}
+
 # 生成 Surge 配置格式
 generate_surge_config() {
     local ip_addr=$1
@@ -1427,14 +1461,14 @@ install_snell() {
     # 获取 IPv4 地址
     IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s --connect-timeout 5 --max-time 10 http://ipinfo.io/${IPV4_ADDR}/country)
+        IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
 
     # 获取 IPv6 地址
     IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s --connect-timeout 5 --max-time 10 https://ipapi.co/${IPV6_ADDR}/country/)
+        IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 
@@ -1943,14 +1977,14 @@ view_snell_config() {
     # 获取 IPv4 地址
     IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s --connect-timeout 5 --max-time 10 http://ipinfo.io/${IPV4_ADDR}/country)
+        IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
 
     # 获取 IPv6 地址
     IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s --connect-timeout 5 --max-time 10 https://ipapi.co/${IPV6_ADDR}/country/)
+        IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
 

@@ -36,6 +36,40 @@ SNELL_CONF_DIR="/etc/snell"
 SNELL_CONF_FILE="${SNELL_CONF_DIR}/users/snell-main.conf"
 SYSTEMD_SERVICE_FILE="${SYSTEMD_DIR}/snell.service"
 
+# 查询 IP 所属国家代码（多接口回退，避免单一接口限流返回错误信息）
+get_ip_country() {
+    local target="$1"
+    local api=""
+    local raw=""
+    local result=""
+
+    if [ -z "$target" ]; then
+        echo "Unknown"
+        return 1
+    fi
+
+    for api in "http://ipinfo.io/${target}/country" \
+               "http://ip-api.com/line/${target}?fields=countryCode" \
+               "https://ipwho.is/${target}?fields=country_code" \
+               "https://ipapi.co/${target}/country/"; do
+        raw=$(curl -s --connect-timeout 5 --max-time 10 "$api" 2>/dev/null)
+        result=$(echo "$raw" | tr -d ' \t\r\n')
+        case "$result" in
+            [A-Za-z][A-Za-z]) ;;
+            *) result=$(echo "$raw" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n 1) ;;
+        esac
+        case "$result" in
+            [A-Za-z][A-Za-z])
+                echo "$result" | tr '[:lower:]' '[:upper:]'
+                return 0
+                ;;
+        esac
+    done
+
+    echo "Unknown"
+    return 1
+}
+
 # 检查是否以 root 权限运行
 check_root() {
     if [ "$(id -u)" != "0" ]; then
@@ -678,11 +712,11 @@ show_information() {
     
     echo -e "${YELLOW}服务器信息:${RESET}"
     if [ ! -z "$IPV4_ADDR" ]; then
-        IP_COUNTRY_IPV4=$(curl -s http://ipinfo.io/${IPV4_ADDR}/country)
+        IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${YELLOW}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
     if [ ! -z "$IPV6_ADDR" ]; then
-        IP_COUNTRY_IPV6=$(curl -s https://ipapi.co/${IPV6_ADDR}/country/)
+        IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "${YELLOW}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
     fi
     echo -e "${YELLOW}服务器端口: ${RESET}${PORT}"
