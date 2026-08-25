@@ -44,6 +44,8 @@ jobs:
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
       has_work: ${{ steps.resolve.outputs.has_work }}
+      ordered: ${{ steps.resolve.outputs.ordered }}
+      latest_version: ${{ steps.resolve.outputs.latest_version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -139,10 +141,11 @@ jobs:
               fi
 
               tags="${IMAGE_NAME}:${version}"
-              # 只有通道内最新版才带 channel 与 latest 标签
+              # 只有通道内最新版才带 channel 标签
               if [ "$version" = "$latest" ]; then
                 tags="${tags},${IMAGE_NAME}:${channel}"
-                if [ "$channel" = "${LATEST_CHANNEL}" ]; then
+                # 全量模式下 latest 留到所有构建结束后单独打，确保其时间戳最新
+                if [ "$channel" = "${LATEST_CHANNEL}" ] && [ "$ALL_VERSIONS" != "true" ]; then
                   tags="${tags},${IMAGE_NAME}:latest"
                 fi
               fi
@@ -162,9 +165,19 @@ jobs:
           echo "has_work=true" >> "$GITHUB_OUTPUT"
           echo "matrix={\"include\":[${entries%,}]}" >> "$GITHUB_OUTPUT"
 
+          # 全量模式串行构建以保证标签时间戳顺序，并记录 latest 应指向的版本
+          if [ "$ALL_VERSIONS" = "true" ]; then
+            echo "ordered=true" >> "$GITHUB_OUTPUT"
+            echo "latest_version=v$(pick_latest "${LATEST_CHANNEL#v}")" >> "$GITHUB_OUTPUT"
+          else
+            echo "ordered=false" >> "$GITHUB_OUTPUT"
+            echo "latest_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 常规构建：版本少，并行即可
   build:
     needs: resolve
-    if: needs.resolve.outputs.has_work == 'true'
+    if: needs.resolve.outputs.has_work == 'true' && needs.resolve.outputs.ordered != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -196,3 +209,76 @@ jobs:
             BUILD_CREATED=${{ github.event.repository.updated_at }}
           cache-from: type=gha,scope=${{ matrix.channel }}
           cache-to: type=gha,mode=max,scope=${{ matrix.channel }}
+
+  # 全量构建：单机串行，按 v4 -> v5 -> v6 顺序、通道内版本号递增依次推送，
+  # 使 Docker Hub 上的标签更新时间与版本顺序一致，最后再打 latest
+  build-ordered:
+    needs: resolve
+    if: needs.resolve.outputs.has_work == 'true' && needs.resolve.outputs.ordered == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 多架构构建需要 QEMU 模拟 arm64 / armv7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push all versions in order
+        env:
+          MATRIX: ${{ needs.resolve.outputs.matrix }}
+          BUILD_CREATED: ${{ github.event.repository.updated_at }}
+        run: |
+          set -euo pipefail
+
+          total=$(echo "$MATRIX" | jq '.include | length')
+          echo "共 ${total} 个版本，按顺序串行构建"
+          echo "$MATRIX" | jq -r '.include[] | "  " + .channel + " " + .version + " -> " + .tags'
+
+          index=0
+          echo "$MATRIX" | jq -c '.include[]' | while read -r item; do
+            index=$((index + 1))
+            channel=$(echo "$item" | jq -r '.channel')
+            version=$(echo "$item" | jq -r '.version')
+            platforms=$(echo "$item" | jq -r '.platforms')
+            tags=$(echo "$item" | jq -r '.tags')
+
+            tag_args=""
+            for t in $(echo "$tags" | tr ',' ' '); do
+              tag_args="${tag_args} -t ${t}"
+            done
+
+            echo "::group::[${index}/${total}] ${channel} ${version}"
+            # shellcheck disable=SC2086
+            docker buildx build \
+              --platform "$platforms" \
+              --provenance=false \
+              --build-arg "SNELL_VERSION=${version}" \
+              --build-arg "SNELL_VER=${channel}" \
+              --build-arg "SHADOWTLS_VERSION=${SHADOWTLS_VERSION}" \
+              --build-arg "BUILD_CREATED=${BUILD_CREATED}" \
+              --cache-from "type=gha,scope=${channel}" \
+              --cache-to "type=gha,mode=max,scope=${channel}" \
+              ${tag_args} \
+              --push \
+              .
+            echo "::endgroup::"
+          done
+
+      # 单独打 latest，使其成为时间戳最新的标签
+      - name: Tag latest
+        if: needs.resolve.outputs.latest_version != ''
+        env:
+          LATEST_VERSION: ${{ needs.resolve.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+          echo "将 ${IMAGE_NAME}:latest 指向 ${IMAGE_NAME}:${LATEST_VERSION}"
+          docker buildx imagetools create \
+            -t "${IMAGE_NAME}:latest" \
+            "${IMAGE_NAME}:${LATEST_VERSION}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:latest" | head -20
+
