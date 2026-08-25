@@ -61,6 +61,16 @@ services:
 docker compose up -d
 ```
 
+> 💡 **上面的示例装的是 v5。如果要装 Snell v6，配置方式有变化：**
+> v6 新增了两个必须关注的参数 —— `mode`（加密模式，**客户端必须与服务端一致**）
+> 和 `dns-ip-preference`（DNS 解析地址族偏好）。
+>
+> - **脚本安装**：选择 v6 后脚本会**逐项交互询问**这两个参数，并列出每个取值的适用场景，回车即用推荐值
+> - **Docker**：通过 `-e SNELL_MODE=...` 和 `-e SNELL_DNS_IP_PREFERENCE=...` 设置，
+>   镜像标签要用 `:v6` 且 `SNELL_VER=v6` → [部署 Snell v6](#3-部署-snell-v6)
+>
+> 取值含义、选型建议与推荐组合表 → [Snell v6 专属参数](#snell-v6-专属参数)
+
 **② 获取配置** —— 三种装法都会直接输出 Surge 格式配置，复制即可用
 
 ```bash
@@ -153,6 +163,8 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 | 查 Docker 环境变量 | [环境变量](#五环境变量) |
 | 加 ShadowTLS 伪装 | [ShadowTLS](#shadowtls) |
 | 搞不清 v4 / v5 / v6 选哪个 | [协议介绍](#协议介绍) |
+| 安装 v6，不知道 mode 怎么选 | [Snell v6 专属参数](#snell-v6-专属参数) ｜ [建议组合](#建议组合) |
+| 用 Docker 部署 v6 | [部署 Snell v6](#3-部署-snell-v6) |
 | 做流量限额 | [流量管理](#流量管理) |
 | Alpine 3.19+ 装不上 | [Alpine 版本限制](#alpine-版本限制) |
 
@@ -234,7 +246,7 @@ surge.conf          # Surge 参考配置文件
 
 ### 一、脚本安装
 
-**1. 自动识别系统（推荐入门）**
+#### 1. 自动识别系统（推荐入门）
 
 脚本会检测发行版并调用对应的安装脚本：
 
@@ -242,7 +254,7 @@ surge.conf          # Surge 参考配置文件
 sh -c "$(curl -fsSL https://install.jinqians.com)"
 ```
 
-**2. 多功能管理菜单（推荐 Debian / Ubuntu）**
+#### 2. 多功能管理菜单（推荐 Debian / Ubuntu）
 
 ```bash
 bash <(curl -L -s menu.jinqians.com)
@@ -260,7 +272,7 @@ bash <(curl -L -s menu.jinqians.com)
 
 > 选项 3（VLESS Reality）与选项 9（流量管理）已整合到 PSM，选择后会引导安装 PSM。
 
-**3. 按系统单独安装**
+#### 3. 按系统单独安装
 
 | 系统 | 命令 |
 |------|------|
@@ -321,7 +333,7 @@ HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 5, reuse = true, tfo =
 
 架构支持：v4 / v5 为 `amd64`、`arm64`、`armv7`；v6 上游未提供 armv7 构建，仅 `amd64`、`arm64`。
 
-**1. 仅 Snell**
+#### 1. 仅 Snell
 
 ```bash
 docker run -d --name snell-server \
@@ -337,7 +349,7 @@ docker run -d --name snell-server \
 docker logs snell-server
 ```
 
-**2. Snell + ShadowTLS v3**
+#### 2. Snell + ShadowTLS v3
 
 Snell 后端只在容器内监听 `127.0.0.1`，对外仅暴露 ShadowTLS 端口，因此**不需要**映射 6160。
 
@@ -357,7 +369,75 @@ docker run -d --name snell-shadowtls \
 docker logs snell-shadowtls
 ```
 
-**3. 切换 Snell 版本**
+#### 3. 部署 Snell v6
+
+v6 需要额外指定 `SNELL_MODE`，参数含义与选型见 [Snell v6 专属参数](#snell-v6-专属参数)。
+镜像用 `:v6` 标签，环境变量 `SNELL_VER=v6`，两者必须同时设置。
+
+```bash
+docker run -d --name snell-v6 --restart unless-stopped \
+  -p 6160:6160/tcp -p 6160:6160/udp \
+  -e SNELL_VER=v6 \
+  -e SNELL_PORT=6160 \
+  -e SNELL_MODE=default \
+  -e SNELL_DNS_IP_PREFERENCE=default \
+  -v ./snell-config:/etc/snell \
+  jinqians/snell-server:v6
+
+docker logs snell-v6
+```
+
+Docker Compose 写法：
+
+```yaml
+services:
+  snell:
+    image: jinqians/snell-server:v6
+    container_name: snell-v6
+    restart: unless-stopped
+    ports:
+      - "6160:6160/tcp"
+      - "6160:6160/udp"
+    environment:
+      - SNELL_VER=v6
+      - SNELL_PORT=6160
+      - SNELL_MODE=default              # default / unshaped / unsafe-raw
+      - SNELL_DNS_IP_PREFERENCE=default # default / prefer-ipv4 / prefer-ipv6 / ipv4-only / ipv6-only
+      # - SNELL_DNS=1.1.1.1,8.8.8.8
+    volumes:
+      - ./snell-config:/etc/snell
+```
+
+几个常用组合（完整对照见 [建议组合](#建议组合)）：
+
+```bash
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=default      # 常规使用，不确定时用这个
+-e SNELL_MODE=unshaped  -e SNELL_DNS_IP_PREFERENCE=default      # 线路干净，追求吞吐（约 +10%）
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=ipv4-only    # VPS 无 IPv6 出口
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=ipv6-only    # IPv6 Only VPS
+```
+
+容器日志会直接输出带 `mode` 的客户端配置，**客户端 mode 必须与服务端一致**：
+
+```text
+Snell = snell, 1.2.3.4, 6160, psk = xxx, version = 6, mode = unshaped, reuse = true, tfo = true
+```
+
+> ⚠️ **修改 v6 参数时注意**：环境变量只在**首次生成配置文件时**生效。
+> 挂载目录里已有 `snell-server.conf` 后，改 `SNELL_MODE` 重启容器不会生效，
+> 容器会在日志里提示这一点。想修改有两种方式：
+>
+> ```bash
+> # 方式一：直接改配置文件（保留 PSK，推荐）
+> sed -i 's/^mode = .*/mode = unshaped/' ./snell-config/snell-server.conf
+> docker restart snell-v6
+>
+> # 方式二：删除配置文件让容器重新生成（PSK 会变，客户端需同步更新）
+> rm ./snell-config/snell-server.conf
+> docker restart snell-v6
+> ```
+
+#### 4. 切换 Snell 版本
 
 需同时修改**镜像标签**和 `SNELL_VER`；删除旧配置文件会重新生成 PSK，保留则沿用原 PSK：
 
@@ -373,7 +453,7 @@ docker run -d --name snell-server \
   jinqians/snell-server:v6
 ```
 
-**4. 本地构建镜像**
+#### 5. 本地构建镜像
 
 ```bash
 ./build-docker-images.sh                      # 构建全部通道与版本
@@ -585,7 +665,7 @@ Snell 是 Surge 团队设计的轻量级加密代理协议，以极简的协议�
 | 部署级协议多样性 | 不支持 | 不支持 | 支持（PSK 派生） |
 | 加密模式 `mode` | 不支持 | 不支持 | `default` / `unshaped` / `unsafe-raw` |
 | obfs 混淆 | 支持 `http` | 支持 `http` | 已移除 |
-| `ipv6` 参数 | 支持 | 支持 | 已废弃，改用 `dns-ip-preference` |
+| 地址族控制 | `ipv6` | `ipv6` | 新增 `dns-ip-preference`，本项目在 v6 下统一使用它 |
 | 多地址监听 | 不支持 | 不支持 | 支持（`listen` 逗号分隔） |
 | armv7l 官方构建 | 提供 | 提供 | 不提供 |
 
@@ -600,6 +680,66 @@ HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 5, reuse = true, tfo = true
 # v6：mode 必须与服务端一致
 HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 6, mode = default, reuse = true, tfo = true
 ```
+
+### Snell v6 专属参数
+
+安装或升级到 v6 时，脚本会交互式询问下面两个参数；Docker 则通过环境变量设置。
+
+#### mode（加密模式）
+
+**服务端与客户端必须完全一致，不一致将无法连接。**
+
+| 取值 | 行为 | 建议场景 |
+|------|------|----------|
+| `default` | 流量混淆 + AES 加密 | **默认推荐**。特征伪装最完整，抗识别与抗封锁能力最强 |
+| `unshaped` | 关闭混淆，仅 AES 加密 | 吞吐比 `default` 提升约 10%。线路干净、以速度为先，或已叠加 ShadowTLS 等外层伪装时使用 |
+| `unsafe-raw` | 明文转发，不加密不混淆 | ⚠️ 数据可被完整还原，**公网切勿使用**。仅用于内网或可信链路的性能测试 |
+
+#### dns-ip-preference（DNS 解析地址族偏好）
+
+控制服务端解析目标域名后优先使用哪种地址族出站，**与监听地址无关**。
+
+| 取值 | 行为 | 建议场景 |
+|------|------|----------|
+| `default` | 跟随系统默认解析行为 | **默认推荐**，适配绝大多数 VPS |
+| `prefer-ipv4` | 双栈可用时优先 IPv4，失败回落 IPv6 | IPv6 出口质量差，或目标站点 IPv6 解锁较差 |
+| `prefer-ipv6` | 双栈可用时优先 IPv6，失败回落 IPv4 | IPv6 线路更优，或需要 IPv6 解锁流媒体 |
+| `ipv4-only` | 只使用 IPv4 解析结果 | VPS 无 IPv6 出口，避免连接 IPv6 目标时白等超时 |
+| `ipv6-only` | 只使用 IPv6 解析结果 | IPv6 Only 的 VPS（无 IPv4 出口） |
+
+#### 建议组合
+
+| 场景 | mode | dns-ip-preference |
+|------|------|-------------------|
+| 常规使用（不确定时） | `default` | `default` |
+| 线路易被干扰、需要最强伪装 | `default` | `default` |
+| 干净线路、追求最大吞吐 | `unshaped` | `default` |
+| 已叠加 ShadowTLS，外层已有伪装 | `unshaped` | `default` |
+| 纯 IPv4 VPS（无 IPv6 出口） | `default` | `ipv4-only` |
+| IPv6 Only VPS | `default` | `ipv6-only` |
+| 需要 IPv6 解锁流媒体 | `default` | `prefer-ipv6` |
+| 内网 / 可信链路性能测试 | `unsafe-raw` | `default` |
+
+对应的服务端配置文件：
+
+```ini
+[snell-server]
+listen = ::0:6160
+psk = your_psk
+mode = unshaped
+dns-ip-preference = default
+dns = 1.1.1.1
+```
+
+Docker 用环境变量设置同样的参数：
+
+```bash
+-e SNELL_VER=v6 -e SNELL_MODE=unshaped -e SNELL_DNS_IP_PREFERENCE=default
+```
+
+> v6 的 `listen` 还支持逗号分隔的多地址监听，例如
+> `listen = 0.0.0.0:6160,[::]:6160`，可显式同时绑定 IPv4 与 IPv6，
+> 不再依赖系统的双栈兼容行为。本项目脚本暂未提供该项的交互配置，需要时可手动编辑配置文件。
 
 ### ShadowTLS
 

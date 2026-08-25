@@ -62,6 +62,15 @@ services:
 docker compose up -d
 ```
 
+> 💡 **The examples above install v5. Snell v6 is configured differently:**
+> v6 adds two options you must decide on — `mode` (transport mode, **the client must
+> match the server**) and `dns-ip-preference` (DNS address-family preference).
+>
+> - **Script install**: after picking v6 the script **prompts for both**, listing what each value is for; press Enter for the recommended default
+> - **Docker**: set `-e SNELL_MODE=...` and `-e SNELL_DNS_IP_PREFERENCE=...`, with the `:v6` tag and `SNELL_VER=v6` → [Deploying Snell v6](#c-deploying-snell-v6)
+>
+> Value meanings and recommended combinations → [Snell v6-only options](#snell-v6-only-options)
+
 **② Get the config** — all three print a ready-to-use Surge config
 
 ```bash
@@ -156,6 +165,8 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 | Look up Docker env vars | [Environment variables](#5-environment-variables) |
 | Add ShadowTLS camouflage | [ShadowTLS](#shadowtls) |
 | Decide between v4 / v5 / v6 | [Protocols](#protocols) |
+| Installing v6, unsure which mode | [Snell v6-only options](#snell-v6-only-options) ｜ [Recommended combinations](#recommended-combinations) |
+| Deploy v6 with Docker | [Deploying Snell v6](#c-deploying-snell-v6) |
 | Set traffic quotas | [Traffic Management](#traffic-management) |
 | Alpine 3.19+ won't install | [Alpine version limits](#alpine-version-limits) |
 
@@ -232,13 +243,13 @@ surge.conf          # Surge reference config
 
 ### 1. Script install
 
-**a. Auto-detect the system (easiest)**
+#### a. Auto-detect the system (easiest)
 
 ```bash
 sh -c "$(curl -fsSL https://install.jinqians.com)"
 ```
 
-**b. All-in-one menu (recommended on Debian / Ubuntu)**
+#### b. All-in-one menu (recommended on Debian / Ubuntu)
 
 ```bash
 bash <(curl -L -s menu.jinqians.com)
@@ -257,7 +268,7 @@ After installation, type `menu` to reopen it:
 > Options 3 (VLESS Reality) and 9 (traffic management) are handled by PSM; selecting them
 > guides you through installing PSM.
 
-**c. Per-distro scripts**
+#### c. Per-distro scripts
 
 | System | Command |
 |--------|---------|
@@ -321,7 +332,7 @@ Image: [`jinqians/snell-server`](https://hub.docker.com/r/jinqians/snell-server)
 Architectures: v4 / v5 ship `amd64`, `arm64`, `armv7`; v6 has no upstream armv7 build, so
 `amd64` and `arm64` only.
 
-**a. Snell only**
+#### a. Snell only
 
 ```bash
 docker run -d --name snell-server \
@@ -337,7 +348,7 @@ docker run -d --name snell-server \
 docker logs snell-server
 ```
 
-**b. Snell + ShadowTLS v3**
+#### b. Snell + ShadowTLS v3
 
 The Snell backend stays on `127.0.0.1` inside the container, so there is **no need** to
 publish 6160.
@@ -358,7 +369,76 @@ docker run -d --name snell-shadowtls \
 docker logs snell-shadowtls
 ```
 
-**c. Switching Snell versions**
+#### c. Deploying Snell v6
+
+v6 needs `SNELL_MODE`; see [Snell v6-only options](#snell-v6-only-options) for what the
+values mean. Use the `:v6` tag **and** `SNELL_VER=v6` — both are required.
+
+```bash
+docker run -d --name snell-v6 --restart unless-stopped \
+  -p 6160:6160/tcp -p 6160:6160/udp \
+  -e SNELL_VER=v6 \
+  -e SNELL_PORT=6160 \
+  -e SNELL_MODE=default \
+  -e SNELL_DNS_IP_PREFERENCE=default \
+  -v ./snell-config:/etc/snell \
+  jinqians/snell-server:v6
+
+docker logs snell-v6
+```
+
+Docker Compose:
+
+```yaml
+services:
+  snell:
+    image: jinqians/snell-server:v6
+    container_name: snell-v6
+    restart: unless-stopped
+    ports:
+      - "6160:6160/tcp"
+      - "6160:6160/udp"
+    environment:
+      - SNELL_VER=v6
+      - SNELL_PORT=6160
+      - SNELL_MODE=default              # default / unshaped / unsafe-raw
+      - SNELL_DNS_IP_PREFERENCE=default # default / prefer-ipv4 / prefer-ipv6 / ipv4-only / ipv6-only
+      # - SNELL_DNS=1.1.1.1,8.8.8.8
+    volumes:
+      - ./snell-config:/etc/snell
+```
+
+Common combinations (full table in [Recommended combinations](#recommended-combinations)):
+
+```bash
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=default      # general use
+-e SNELL_MODE=unshaped  -e SNELL_DNS_IP_PREFERENCE=default      # clean link, ~10% more throughput
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=ipv4-only    # VPS without IPv6 egress
+-e SNELL_MODE=default   -e SNELL_DNS_IP_PREFERENCE=ipv6-only    # IPv6-only VPS
+```
+
+The log prints the client config with `mode` filled in — **the client's mode must match**:
+
+```text
+Snell = snell, 1.2.3.4, 6160, psk = xxx, version = 6, mode = unshaped, reuse = true, tfo = true
+```
+
+> ⚠️ **Changing v6 options later**: environment variables only apply when the config file is
+> **first generated**. Once `snell-server.conf` exists in the mounted directory, changing
+> `SNELL_MODE` and restarting does nothing — the container says so in its log. Two ways to
+> actually change it:
+>
+> ```bash
+> # Option 1: edit the config file (keeps the PSK, recommended)
+> sed -i 's/^mode = .*/mode = unshaped/' ./snell-config/snell-server.conf
+> docker restart snell-v6
+>
+> # Option 2: delete it and let the container regenerate (PSK changes — update clients)
+> rm ./snell-config/snell-server.conf
+> docker restart snell-v6
+> ```
+
+#### d. Switching Snell versions
 
 Change **both** the image tag and `SNELL_VER`. Deleting the old config regenerates the
 PSK; keeping it reuses the existing one:
@@ -375,7 +455,7 @@ docker run -d --name snell-server \
   jinqians/snell-server:v6
 ```
 
-**d. Building images locally**
+#### e. Building images locally
 
 ```bash
 ./build-docker-images.sh                      # all channels and versions
@@ -589,7 +669,7 @@ It is supported by the **Surge client only**.
 | Deployment-level protocol diversity | No | No | Yes (PSK-derived) |
 | Cipher `mode` | No | No | `default` / `unshaped` / `unsafe-raw` |
 | obfs | `http` | `http` | Removed |
-| `ipv6` option | Yes | Yes | Deprecated, use `dns-ip-preference` |
+| Address-family control | `ipv6` | `ipv6` | Adds `dns-ip-preference`; this project uses it on v6 |
 | Multi-address listen | No | No | Yes (comma-separated `listen`) |
 | Official armv7l build | Yes | Yes | No |
 
@@ -605,6 +685,69 @@ HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 5, reuse = true, tfo = true
 # v6: mode must match the server
 HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 6, mode = default, reuse = true, tfo = true
 ```
+
+### Snell v6-only options
+
+The scripts prompt for both options when installing or upgrading to v6; Docker sets them
+through environment variables.
+
+#### mode (transport mode)
+
+**Server and client must match exactly, or the connection fails.**
+
+| Value | Behaviour | When to use |
+|-------|-----------|-------------|
+| `default` | Traffic obfuscation + AES encryption | **Recommended default.** Strongest fingerprint camouflage and blocking resistance |
+| `unshaped` | No obfuscation, AES encryption only | ~10% higher throughput than `default`. Use on clean links, when speed matters most, or when ShadowTLS already provides camouflage |
+| `unsafe-raw` | Plaintext forwarding, no encryption | ⚠️ Traffic can be fully reconstructed — **never use on the public internet**. Local or trusted links only |
+
+#### dns-ip-preference (DNS address-family preference)
+
+Controls which address family the server prefers after resolving a destination hostname.
+**Unrelated to the listen address.**
+
+| Value | Behaviour | When to use |
+|-------|-----------|-------------|
+| `default` | Follow system default resolution | **Recommended default**, fits most VPSes |
+| `prefer-ipv4` | Prefer IPv4, fall back to IPv6 | Poor IPv6 egress, or destinations with weak IPv6 unblocking |
+| `prefer-ipv6` | Prefer IPv6, fall back to IPv4 | Better IPv6 route, or IPv6-based streaming unblocking |
+| `ipv4-only` | IPv4 results only | VPS without IPv6 egress — avoids waiting on IPv6 timeouts |
+| `ipv6-only` | IPv6 results only | IPv6-only VPS (no IPv4 egress) |
+
+#### Recommended combinations
+
+| Scenario | mode | dns-ip-preference |
+|----------|------|-------------------|
+| General use (when unsure) | `default` | `default` |
+| Link prone to interference, need max camouflage | `default` | `default` |
+| Clean link, maximum throughput | `unshaped` | `default` |
+| Already behind ShadowTLS | `unshaped` | `default` |
+| IPv4-only VPS | `default` | `ipv4-only` |
+| IPv6-only VPS | `default` | `ipv6-only` |
+| IPv6 streaming unblocking | `default` | `prefer-ipv6` |
+| LAN / trusted-link benchmarking | `unsafe-raw` | `default` |
+
+The resulting server config:
+
+```ini
+[snell-server]
+listen = ::0:6160
+psk = your_psk
+mode = unshaped
+dns-ip-preference = default
+dns = 1.1.1.1
+```
+
+The same settings via Docker:
+
+```bash
+-e SNELL_VER=v6 -e SNELL_MODE=unshaped -e SNELL_DNS_IP_PREFERENCE=default
+```
+
+> v6 also accepts a comma-separated multi-address `listen`, e.g.
+> `listen = 0.0.0.0:6160,[::]:6160`, binding IPv4 and IPv6 explicitly instead of relying
+> on the system's dual-stack behaviour. The scripts do not expose this interactively yet —
+> edit the config file directly if you need it.
 
 ### ShadowTLS
 
