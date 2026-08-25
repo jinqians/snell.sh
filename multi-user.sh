@@ -88,6 +88,23 @@ get_ip_country() {
     return 1
 }
 
+# 读取主配置中的 dns-ip-preference（v6），读不到时按 ipv6 开关推导
+get_snell_dns_preference() {
+    local ipv6_enable="$1"
+    local pref=""
+    if [ -f "$SNELL_CONF_FILE" ]; then
+        pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+    fi
+    if [ -z "$pref" ]; then
+        if [ "$ipv6_enable" = "false" ]; then
+            pref="ipv4-only"
+        else
+            pref="default"
+        fi
+    fi
+    echo "$pref"
+}
+
 # 输出单条 Surge 配置（v6 需要带 mode）
 print_surge_line() {
     local country="$1"
@@ -395,11 +412,7 @@ add_user() {
         echo "psk = ${PSK}"
         if [ "$installed_version" = "v6" ]; then
             echo "mode = $(get_snell_mode)"
-            if [ "$ipv6_enable" = "false" ]; then
-                echo "dns-ip-preference = ipv4-only"
-            else
-                echo "dns-ip-preference = default"
-            fi
+            echo "dns-ip-preference = $(get_snell_dns_preference "$ipv6_enable")"
         else
             echo "ipv6 = ${ipv6_enable}"
         fi

@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 # --- 脚本版本号 ---
-current_version="2.2"
+current_version="2.3"
 
 # --- 全局变量 ---
 SNELL_VERSION_CHOICE=""
@@ -22,6 +22,9 @@ SNELL_VERSION=""
 
 # Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
 SNELL_MODE="default"
+
+# Snell v6 DNS 解析地址族偏好：default / prefer-ipv4 / prefer-ipv6 / ipv4-only / ipv6-only
+SNELL_DNS_IP_PREFERENCE="default"
 
 # 抓取失败时的兜底版本号
 SNELL_V4_FALLBACK="v4.1.1"
@@ -190,6 +193,85 @@ select_snell_version() {
             *) echo -e "${RED}请输入正确的选项 [1-3]${RESET}" ;;
         esac
     done
+}
+
+# === Snell v6 参数选择（POSIX sh 写法）===
+# 加密模式 (mode)：客户端必须配置完全相同的值，否则无法连接
+select_snell_v6_mode() {
+    echo -e "\n${CYAN}=== Snell v6 加密模式 (mode) ===${RESET}"
+    echo -e "${YELLOW}客户端必须配置与服务端完全相同的 mode，不一致将无法连接${RESET}\n"
+    echo -e "${GREEN}1.${RESET} default     流量混淆 + AES 加密"
+    echo -e "   特征伪装最完整，抗识别与抗封锁能力最强"
+    echo -e "   ${CYAN}建议：绝大多数用户、线路存在干扰或 QoS 时选此项${RESET}"
+    echo -e "${GREEN}2.${RESET} unshaped    关闭混淆，仅 AES 加密"
+    echo -e "   吞吐相比 default 提升约 10%，但流量特征更明显"
+    echo -e "   ${CYAN}建议：线路干净、以速度为先，或已叠加 ShadowTLS 等外层伪装时选此项${RESET}"
+    echo -e "${GREEN}3.${RESET} unsafe-raw  明文转发，不加密不混淆"
+    echo -e "   ${RED}数据可被完整还原，公网环境切勿使用${RESET}"
+    echo -e "   ${CYAN}建议：仅用于内网或完全可信链路的性能测试${RESET}\n"
+
+    while true; do
+        printf "请选择加密模式 [1-3]（回车使用 1）: "
+        read -r mode_choice
+        [ -z "$mode_choice" ] && mode_choice="1"
+        case "$mode_choice" in
+            1) SNELL_MODE="default";  break ;;
+            2) SNELL_MODE="unshaped"; break ;;
+            3)
+                SNELL_MODE="unsafe-raw"
+                echo -e "${RED}警告：unsafe-raw 为明文传输，请确认该链路完全可信！${RESET}"
+                printf "确认使用 unsafe-raw? [y/N]: "
+                read -r raw_confirm
+                case "$raw_confirm" in
+                    [yY]|[yY][eE][sS]) break ;;
+                    *) echo -e "${CYAN}已取消，请重新选择${RESET}" ;;
+                esac
+                ;;
+            *) echo -e "${RED}请输入正确的选项 [1-3]${RESET}" ;;
+        esac
+    done
+    echo -e "${GREEN}已选择 mode = ${SNELL_MODE}${RESET}"
+}
+
+# DNS 解析地址族偏好 (dns-ip-preference)：影响服务端解析目标域名后用哪种地址出站
+select_snell_v6_dns_preference() {
+    echo -e "\n${CYAN}=== Snell v6 DNS 解析偏好 (dns-ip-preference) ===${RESET}"
+    echo -e "${YELLOW}控制服务端解析目标域名后优先使用哪种地址族出站，与监听地址无关${RESET}\n"
+    echo -e "${GREEN}1.${RESET} default       跟随系统默认解析行为"
+    echo -e "   ${CYAN}建议：不确定时选此项，适配绝大多数 VPS${RESET}"
+    echo -e "${GREEN}2.${RESET} prefer-ipv4   双栈可用时优先 IPv4，失败再试 IPv6"
+    echo -e "   ${CYAN}建议：IPv6 出口质量差、或目标站点 IPv6 解锁较差时${RESET}"
+    echo -e "${GREEN}3.${RESET} prefer-ipv6   双栈可用时优先 IPv6，失败再试 IPv4"
+    echo -e "   ${CYAN}建议：IPv6 线路更优，或需要 IPv6 解锁流媒体时${RESET}"
+    echo -e "${GREEN}4.${RESET} ipv4-only     只使用 IPv4 解析结果"
+    echo -e "   ${CYAN}建议：VPS 无 IPv6 出口，避免连接 IPv6 目标时超时等待${RESET}"
+    echo -e "${GREEN}5.${RESET} ipv6-only     只使用 IPv6 解析结果"
+    echo -e "   ${CYAN}建议：IPv6 Only 的 VPS（无 IPv4 出口）${RESET}\n"
+
+    while true; do
+        printf "请选择 DNS 解析偏好 [1-5]（回车使用 1）: "
+        read -r dns_pref_choice
+        [ -z "$dns_pref_choice" ] && dns_pref_choice="1"
+        case "$dns_pref_choice" in
+            1) SNELL_DNS_IP_PREFERENCE="default";     break ;;
+            2) SNELL_DNS_IP_PREFERENCE="prefer-ipv4"; break ;;
+            3) SNELL_DNS_IP_PREFERENCE="prefer-ipv6"; break ;;
+            4) SNELL_DNS_IP_PREFERENCE="ipv4-only";   break ;;
+            5) SNELL_DNS_IP_PREFERENCE="ipv6-only";   break ;;
+            *) echo -e "${RED}请输入正确的选项 [1-5]${RESET}" ;;
+        esac
+    done
+    echo -e "${GREEN}已选择 dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}${RESET}"
+}
+
+# 统一入口：安装 v6 时调用
+configure_snell_v6_options() {
+    select_snell_v6_mode
+    select_snell_v6_dns_preference
+    echo -e "\n${CYAN}=== v6 参数确认 ===${RESET}"
+    echo -e "${GREEN}服务端 mode              : ${SNELL_MODE}${RESET}"
+    echo -e "${GREEN}服务端 dns-ip-preference : ${SNELL_DNS_IP_PREFERENCE}${RESET}"
+    echo -e "${YELLOW}客户端对应配置：version = 6, mode = ${SNELL_MODE}${RESET}"
 }
 
 # Snell 官方发布页（旧的 manual.nssurge.com/others/snell.html 已下线）
@@ -475,6 +557,10 @@ EOF
     mkdir -p "${SNELL_CONF_DIR}/users"
     mkdir -p "/var/log/snell"
     get_user_port
+    # v6 需要额外选择 mode 与 dns-ip-preference
+    if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
+        configure_snell_v6_options
+    fi
     PSK=$(openssl rand -base64 16)
 
     # v6 使用 mode / dns-ip-preference，ipv6 参数在 v6 已废弃
@@ -484,7 +570,7 @@ EOF
         echo "psk = ${PSK}"
         if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
             echo "mode = ${SNELL_MODE}"
-            echo "dns-ip-preference = default"
+            echo "dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}"
         else
             echo "ipv6 = true"
             echo "tfo = true"
