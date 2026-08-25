@@ -16,6 +16,11 @@ on:
         type: boolean
         required: false
         default: false
+      all_versions:
+        description: "构建通道内全部历史版本（隐含 force），而非仅最新版"
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: "0 3 * * 1"
   push:
@@ -27,6 +32,10 @@ env:
   SHADOWTLS_VERSION: v0.2.25
   # latest 标签跟随哪个通道
   LATEST_CHANNEL: v5
+  # 全量构建时使用的历史版本清单（与 build-docker-images.sh 保持一致）
+  V4_ALL_VERSIONS: "4.0.0 4.0.1 4.1.0 4.1.1"
+  V5_ALL_VERSIONS: "5.0.0 5.0.1"
+  V6_ALL_VERSIONS: "6.0.0b1 6.0.0b2 6.0.0b3 6.0.0b4 6.0.0rc 6.0.0rc2"
 
 jobs:
   # 解析上游最新版本，并跳过 Docker Hub 上已存在的版本
@@ -43,6 +52,7 @@ jobs:
         env:
           CHANNELS: ${{ github.event.inputs.channels || 'v4,v5,v6' }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
+          ALL_VERSIONS: ${{ github.event.inputs.all_versions || 'false' }}
         run: |
           set -euo pipefail
 
@@ -82,18 +92,36 @@ jobs:
             [ "$code" = "200" ]
           }
 
+          # 全量模式下该通道要构建的所有历史版本
+          all_versions_for() {
+            case "$1" in
+              v4) echo "$V4_ALL_VERSIONS" ;;
+              v5) echo "$V5_ALL_VERSIONS" ;;
+              v6) echo "$V6_ALL_VERSIONS" ;;
+            esac
+          }
+
           entries=""
           for channel in $(echo "$CHANNELS" | tr ',' ' '); do
             major="${channel#v}"
-            version="v$(pick_latest "$major")"
-            if [ "$version" = "v" ]; then
-              echo "::warning::无法解析 ${channel} 版本，已跳过"
+            latest="v$(pick_latest "$major")"
+            if [ "$latest" = "v" ]; then
+              echo "::warning::无法解析 ${channel} 最新版本，已跳过"
               continue
             fi
 
-            if [ "$FORCE" != "true" ] && tag_exists "$version"; then
-              echo "${channel}: ${version} 已存在于 Docker Hub，跳过"
-              continue
+            # 全量模式构建历史清单（并确保包含解析出的最新版），否则只构建最新版
+            if [ "$ALL_VERSIONS" = "true" ]; then
+              versions=""
+              for v in $(all_versions_for "$channel"); do
+                versions="${versions} v${v}"
+              done
+              case " $versions " in
+                *" $latest "*) ;;
+                *) versions="${versions} ${latest}" ;;
+              esac
+            else
+              versions="$latest"
             fi
 
             # v6 上游未提供 armv7l 构建
@@ -103,13 +131,25 @@ jobs:
               platforms="linux/amd64,linux/arm64,linux/arm/v7"
             fi
 
-            tags="${IMAGE_NAME}:${version},${IMAGE_NAME}:${channel}"
-            if [ "$channel" = "${LATEST_CHANNEL}" ]; then
-              tags="${tags},${IMAGE_NAME}:latest"
-            fi
+            for version in $versions; do
+              # 全量模式隐含 force，否则跳过 Docker Hub 上已存在的标签
+              if [ "$ALL_VERSIONS" != "true" ] && [ "$FORCE" != "true" ] && tag_exists "$version"; then
+                echo "${channel}: ${version} 已存在于 Docker Hub，跳过"
+                continue
+              fi
 
-            echo "${channel}: 将构建 ${version} (${platforms})"
-            entries="${entries}{\"channel\":\"${channel}\",\"version\":\"${version}\",\"platforms\":\"${platforms}\",\"tags\":\"${tags}\"},"
+              tags="${IMAGE_NAME}:${version}"
+              # 只有通道内最新版才带 channel 与 latest 标签
+              if [ "$version" = "$latest" ]; then
+                tags="${tags},${IMAGE_NAME}:${channel}"
+                if [ "$channel" = "${LATEST_CHANNEL}" ]; then
+                  tags="${tags},${IMAGE_NAME}:latest"
+                fi
+              fi
+
+              echo "${channel}: 将构建 ${version} (${platforms}) -> ${tags}"
+              entries="${entries}{\"channel\":\"${channel}\",\"version\":\"${version}\",\"platforms\":\"${platforms}\",\"tags\":\"${tags}\"},"
+            done
           done
 
           if [ -z "$entries" ]; then
