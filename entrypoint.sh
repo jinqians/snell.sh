@@ -172,13 +172,32 @@ CONF
     echo "配置文件已生成: $CONFIG_FILE"
 fi
 
-# --- 2. 输出服务端配置 ---
+# --- 2. 环境变量与已有配置不一致时给出提示 ---
+# 配置文件已存在时不会被环境变量覆盖，否则会静默改掉正在使用的参数
+warn_env_ignored() {
+    key="$1"; env_value="$2"
+    [ -n "$env_value" ] || return 0
+    current="$(config_get "$key")"
+    [ -n "$current" ] || return 0
+    [ "$current" = "$env_value" ] && return 0
+    echo "提示: 环境变量指定 ${key} = ${env_value}，但现有配置为 ${key} = ${current}"
+    echo "      配置文件已存在，不会被环境变量覆盖，本次仍使用 ${current}"
+    echo "      如需修改：编辑 ${CONFIG_FILE} 后重启容器，或删除该文件让容器重新生成（PSK 会变）"
+}
+
+if [ "$SNELL_VER" = "v6" ]; then
+    warn_env_ignored "mode" "${SNELL_MODE:-}"
+    warn_env_ignored "dns-ip-preference" "${SNELL_DNS_IP_PREFERENCE:-}"
+fi
+warn_env_ignored "psk" "${SNELL_PSK:-}"
+
+# --- 3. 输出服务端配置 ---
 echo
 echo "===== 服务端配置 (${CONFIG_FILE}) ====="
 cat "$CONFIG_FILE"
 echo
 
-# --- 3. ShadowTLS 密码准备（需在打印客户端配置之前完成） ---
+# --- 4. ShadowTLS 密码准备（需在打印客户端配置之前完成） ---
 if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
     if [ -z "${SHADOWTLS_PASSWORD:-}" ]; then
         if [ -f "$SHADOWTLS_PASSWORD_FILE" ]; then
@@ -191,11 +210,11 @@ if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
     fi
 fi
 
-# --- 4. 输出客户端配置 ---
+# --- 5. 输出客户端配置 ---
 print_client_config
 echo
 
-# --- 5. 启动服务 ---
+# --- 6. 启动服务 ---
 if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
     CONFIG_SNELL_PORT="$(config_listen_port || true)"
     SNELL_PORT="${SNELL_PORT:-${CONFIG_SNELL_PORT:-6160}}"
