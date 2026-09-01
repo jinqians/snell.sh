@@ -176,6 +176,7 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
   - [项目介绍](#项目介绍)
   - [使用方法](#使用方法)
     - [一、脚本安装](#一脚本安装)
+      - [多版本共存（v4 / v5 / v6 同机运行）](#3-多版本共存v4--v5--v6-同机运行)
       - [Alpine 版本限制](#alpine-版本限制)
     - [二、Docker 部署](#二docker-部署)
     - [三、Docker Compose](#三docker-compose)
@@ -205,8 +206,9 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 | 能力 | 说明 |
 |------|------|
 | Snell v4 / v5 / v6 | 三个版本任选，脚本与镜像均可互相切换 |
+| **多版本共存** | 同一台机器上不同端口可以分别跑 v4 / v5 / v6，互不影响（脚本方式） |
 | ShadowTLS v3 | 为 Snell 套一层 TLS 伪装，隐藏原始端口 |
-| 多用户 | 单机多端口 / 多 PSK，独立增删改查 |
+| 多用户 | 单机多端口 / 多 PSK，独立增删改查，每个用户可单独选版本 |
 | BBR | 一键开启 BBR 拥塞控制 |
 | 出口控制 | Snell v5 / v6 的 `egress-interface` 设置 |
 | 自动更新 | 脚本内置自更新；镜像由 GitHub Actions 每周跟随上游发布 |
@@ -272,7 +274,50 @@ bash <(curl -L -s menu.jinqians.com)
 
 > 选项 3（VLESS Reality）与选项 9（流量管理）已整合到 PSM，选择后会引导安装 PSM。
 
-#### 3. 按系统单独安装
+#### 3. 多版本共存（v4 / v5 / v6 同机运行）
+
+Debian / Ubuntu 脚本支持**每个端口单独选版本**：v4、v5、v6 的二进制分开存放，
+各自的 systemd 服务指向自己的版本，互不影响。
+
+```
+/usr/local/bin/snell-server-v4    # v4 通道
+/usr/local/bin/snell-server-v5    # v5 通道
+/usr/local/bin/snell-server-v6    # v6 通道
+/usr/local/bin/snell-server       # 软链，指向主用户所用的版本
+```
+
+每个用户的配置文件首行会记录它属于哪个通道：
+
+```ini
+#version-choice = v6
+[snell-server]
+listen = ::0:7000
+psk = ...
+mode = default
+```
+
+**给某个端口指定版本**：主菜单 `7. 多用户管理` → `2. 添加新用户`，
+输入端口后会让你选 v4 / v5 / v6；所选版本没装过会自动下载，不会动到其他端口。
+
+**改已有端口的版本**：`7. 多用户管理` → `4. 修改用户配置` → `4. 修改 Snell 版本`。
+配置参数（v4/v5 的 `ipv6` 与 v6 的 `mode`、`dns-ip-preference`）会自动转换，
+切换失败会自动回滚到原版本。
+
+**主菜单 `8. 版本管理`** 提供三个动作：
+
+| 动作 | 说明 |
+|------|------|
+| 检查并更新已安装通道 | 逐个通道比对上游最新版，只重启用到该通道的服务 |
+| 安装一个新通道 | 只下载二进制，不改动任何现有用户 |
+| 切换某个用户使用的通道 | 含主用户，等价于多用户菜单里的「修改版本」 |
+
+> **升级已有安装**：直接运行新版脚本即可，会自动把原来的单一 `snell-server`
+> 迁成版本化布局并给所有配置补上版本标记，服务不中断。这个迁移是幂等的，重复运行无副作用。
+
+> **客户端记得同步改**：v4 写 `version = 4`，v5 可写 `4` 或 `5`，
+> v6 写 `version = 6` 且必须带上与服务端一致的 `mode`。
+
+#### 4. 按系统单独安装
 
 | 系统 | 命令 |
 |------|------|
@@ -280,6 +325,9 @@ bash <(curl -L -s menu.jinqians.com)
 | CentOS / RHEL | `bash <(curl -L -s snell-centos.jinqians.com)` |
 | Alpine（Docker 本地构建） | `sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"` |
 | Alpine 3.18 及以下（原生安装） | `sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"` |
+
+> Alpine / CentOS 脚本与 Docker 方式暂不支持单机多版本共存，
+> 容器方式请改为按版本各起一个容器（见 [Docker 部署](#二docker-部署)）。
 
 #### Alpine 版本限制
 
@@ -300,7 +348,7 @@ Snell 主脚本菜单：
 
 ```
 === 基础功能 ===        === 增强功能 ===        === 系统功能 ===
-1. 安装 Snell            5. ShadowTLS 管理       8.  更新 Snell
+1. 安装 Snell            5. ShadowTLS 管理       8.  版本管理
 2. 卸载 Snell            6. BBR 管理             9.  更新脚本
 3. 查看配置              7. 多用户管理           10. 查看服务状态
 4. 重启服务                                      11. Snell v5/v6 出口控制设置
@@ -310,9 +358,17 @@ Snell 主脚本菜单：
 
 ```text
 === 配置信息 ===
-当前安装版本: Snell v5
+已安装通道: v4 v5 v6
+
+主用户配置：
+端口: 57891
+版本: Snell v5
 HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 4, reuse = true, tfo = true
 HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 5, reuse = true, tfo = true
+
+用户配置 (端口: 7000):
+版本: Snell v6
+HK = snell, 1.2.3.4, 7000, psk = yyyyyyyyyyyy, version = 6, mode = default, reuse = true, tfo = true
 ```
 
 ### 二、Docker 部署

@@ -14,11 +14,10 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="5.4"
+current_version="5.5"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
-SNELL_VERSION=""
 
 # Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
 SNELL_MODE="default"
@@ -270,50 +269,13 @@ get_latest_snell_v6_version() {
     fi
 }
 
-# 获取 Snell 最新版本（根据选择的版本）
-get_latest_snell_version() {
-    if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
-        SNELL_VERSION=$(get_latest_snell_v6_version)
-    elif [ "$SNELL_VERSION_CHOICE" = "v5" ]; then
-        SNELL_VERSION=$(get_latest_snell_v5_version)
-    else
-        SNELL_VERSION=$(get_latest_snell_v4_version)
-    fi
-}
-
-# 获取 Snell 下载 URL
-get_snell_download_url() {
-    local arch=$(uname -m)
-
-    # v6 暂不提供 armv7l 构建
-    if [ "$SNELL_VERSION_CHOICE" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
-        echo -e "${RED}Snell v6 暂不支持 armv7l 架构${RESET}" >&2
-        exit 1
-    fi
-
-    case ${arch} in
-        "x86_64"|"amd64")
-            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-            ;;
-        "i386"|"i686")
-            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
-            ;;
-        "aarch64"|"arm64")
-            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-            ;;
-        "armv7l"|"armv7")
-            echo "https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
-            ;;
-        *)
-            echo -e "${RED}不支持的架构: ${arch}${RESET}" >&2
-            exit 1
-            ;;
-    esac
-}
+# 说明：按通道取最新版本号用 resolve_latest_version_for_channel，
+# 生成下载地址用 snell_download_url_for（失败返回非 0，不会 exit 掉整个脚本），
+# 两者都在下方「多版本共存」段落里。
 
 # 读取已安装 v6 服务端使用的 mode（读不到时回落到默认值）
 get_snell_mode() {
-    local conf_file="${SNELL_CONF_DIR}/users/snell-main.conf"
+    local conf_file="${1:-${SNELL_CONF_DIR}/users/snell-main.conf}"
     local mode=""
     if [ -f "$conf_file" ]; then
         mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
@@ -336,6 +298,9 @@ write_snell_conf() {
     local version_choice="$7"
 
     {
+        case "$version_choice" in
+            v4|v5|v6) echo "#${SNELL_VERSION_MARKER_KEY} = ${version_choice}" ;;
+        esac
         echo "[snell-server]"
         echo "listen = ${listen_addr}:${port}"
         echo "psk = ${psk}"
@@ -395,7 +360,22 @@ migrate_snell_conf_for_version() {
         else
             echo "ipv6 = ${ipv6_enable}"
         fi
-    } > "$tmp_conf" && mv "$tmp_conf" "$conf_file"
+    } > "$tmp_conf" || {
+        rm -f "$tmp_conf"
+        echo -e "${RED}生成配置失败: ${conf_file}${RESET}" >&2
+        return 1
+    }
+
+    # 用 cat 回写保留原文件属主与权限（服务以 snell 用户身份读取）
+    cat "$tmp_conf" > "$conf_file" || {
+        rm -f "$tmp_conf"
+        echo -e "${RED}回写配置失败: ${conf_file}${RESET}" >&2
+        return 1
+    }
+    rm -f "$tmp_conf"
+
+    # 通道归属随之更新，后续都以标记为准
+    set_conf_snell_version "$conf_file" "$version_choice"
 }
 
 # 查询 IP 所属国家代码（多接口回退，避免单一接口限流返回错误信息）
@@ -444,7 +424,7 @@ generate_surge_config() {
     if [ "$installed_version" = "v6" ]; then
         # v6 版本：v6 协议（已移除 QUIC 模式与 obfs），mode 必须与服务端一致
         local mode
-        mode=$(get_snell_mode)
+        mode=$(get_snell_mode "$(snell_conf_for_port "$port")")
         echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 6, mode = ${mode}, reuse = true, tfo = true${RESET}"
     elif [ "$installed_version" = "v5" ]; then
         # v5 版本输出 v4 和 v5 两种配置
@@ -475,9 +455,9 @@ detect_installed_snell_version() {
 # === 新增：备份和还原配置函数 ===
 # 备份 Snell 配置
 backup_snell_config() {
-    local backup_dir="/etc/snell/backup_$(date +%Y%m%d_%H%M%S)"
+    local backup_dir="${SNELL_CONF_DIR}/backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
-    cp -a /etc/snell/users/*.conf "$backup_dir"/ 2>/dev/null
+    cp -a "${SNELL_CONF_DIR}/users"/*.conf "$backup_dir"/ 2>/dev/null
     echo "$backup_dir"
 }
 
@@ -485,7 +465,7 @@ backup_snell_config() {
 restore_snell_config() {
     local backup_dir="$1"
     if [ -d "$backup_dir" ]; then
-        cp -a "$backup_dir"/*.conf /etc/snell/users/
+        cp -a "$backup_dir"/*.conf "${SNELL_CONF_DIR}/users"/
         echo -e "${GREEN}配置已从备份恢复。${RESET}"
     else
         echo -e "${RED}未找到备份目录，无法恢复配置。${RESET}"
@@ -549,6 +529,422 @@ OLD_SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
 OLD_SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 SNELL_SERVICE_USER="snell"
 SNELL_SERVICE_GROUP="snell"
+
+# =========================================
+# 多版本共存（v4 / v5 / v6）支持
+#
+# 二进制布局：
+#   ${INSTALL_DIR}/snell-server-v4|v5|v6   各通道的实体文件，systemd unit 直接指向它
+#   ${INSTALL_DIR}/snell-server            软链，指向主用户所用通道（保留给旧的探测逻辑）
+#
+# 版本标记：
+#   每个用户配置首行写 "#version-choice = vX"。注释形式，snell-server 不会解析到，
+#   且随 .conf 一起被备份/还原，不需要额外的伴生文件。
+# =========================================
+SNELL_VERSION_MARKER_KEY="version-choice"
+SNELL_ALL_VERSIONS="v4 v5 v6"
+
+# 版本号 -> 二进制路径
+snell_binary_for_version() {
+    case "$1" in
+        v4|v5|v6) echo "${INSTALL_DIR}/snell-server-$1" ;;
+        *)        echo "${INSTALL_DIR}/snell-server" ;;
+    esac
+}
+
+# 探测指定二进制自身的版本；不可执行时返回 unknown
+probe_snell_binary_version() {
+    local binary="$1"
+    if [ ! -x "$binary" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    local version_output
+    version_output=$("$binary" --v 2>&1)
+    if echo "$version_output" | grep -q "v6"; then
+        echo "v6"
+    elif echo "$version_output" | grep -q "v5"; then
+        echo "v5"
+    else
+        # 早期 v4 的 --v 输出不带大版本号，与历史行为保持一致按 v4 处理
+        echo "v4"
+    fi
+}
+
+# 列出已落盘的通道（空格分隔，可能为空）
+list_installed_snell_versions() {
+    local version installed=""
+    for version in $SNELL_ALL_VERSIONS; do
+        if [ -x "$(snell_binary_for_version "$version")" ]; then
+            installed="${installed}${version} "
+        fi
+    done
+    echo "${installed% }"
+}
+
+# 读取配置里的版本标记；没有标记时返回非 0
+read_conf_snell_version() {
+    local conf_file="$1"
+    [ -f "$conf_file" ] || return 1
+
+    local marked
+    marked=$(grep -E "^[[:space:]]*#[[:space:]]*${SNELL_VERSION_MARKER_KEY}[[:space:]]*=" "$conf_file" \
+        | head -n 1 | awk -F'=' '{print $2}' | tr -d '[:space:]')
+    case "$marked" in
+        v4|v5|v6) echo "$marked" ;;
+        *)        return 1 ;;
+    esac
+}
+
+# 配置对应的通道：优先读标记，读不到回落到软链的实际版本（兼容尚未迁移的老安装）
+get_conf_snell_version() {
+    local conf_file="$1"
+    local marked
+    if marked=$(read_conf_snell_version "$conf_file"); then
+        echo "$marked"
+        return 0
+    fi
+    detect_installed_snell_version
+}
+
+# 幂等写入版本标记：相同则跳过，不同则替换，缺失则插到首行。
+# 用 cat 回写而不是 mv，保留原文件的属主与权限（服务以 snell 用户身份读取）
+set_conf_snell_version() {
+    local conf_file="$1"
+    local version="$2"
+
+    [ -f "$conf_file" ] || return 1
+    case "$version" in
+        v4|v5|v6) ;;
+        *) return 1 ;;
+    esac
+
+    local current=""
+    current=$(read_conf_snell_version "$conf_file" 2>/dev/null)
+    if [ "$current" = "$version" ]; then
+        return 0
+    fi
+
+    local tmp_conf="${conf_file}.vtmp.$$"
+    if ! {
+        echo "#${SNELL_VERSION_MARKER_KEY} = ${version}"
+        grep -Ev "^[[:space:]]*#[[:space:]]*${SNELL_VERSION_MARKER_KEY}[[:space:]]*=" "$conf_file"
+    } > "$tmp_conf"; then
+        rm -f "$tmp_conf"
+        echo -e "${RED}生成版本标记失败: ${conf_file}${RESET}" >&2
+        return 1
+    fi
+
+    if ! cat "$tmp_conf" > "$conf_file"; then
+        rm -f "$tmp_conf"
+        echo -e "${RED}回写版本标记失败: ${conf_file}${RESET}" >&2
+        return 1
+    fi
+    rm -f "$tmp_conf"
+    return 0
+}
+
+# 端口 -> 配置文件路径（主端口走主配置）
+snell_conf_for_port() {
+    local port="$1"
+    local main_port
+    main_port=$(get_snell_port 2>/dev/null)
+    if [ -n "$main_port" ] && [ "$port" = "$main_port" ]; then
+        echo "$SNELL_CONF_FILE"
+    else
+        echo "${SNELL_CONF_DIR}/users/snell-${port}.conf"
+    fi
+}
+
+# 端口 -> 通道
+get_port_snell_version() {
+    get_conf_snell_version "$(snell_conf_for_port "$1")"
+}
+
+# 端口 -> systemd 服务名
+snell_service_for_port() {
+    local port="$1"
+    local main_port
+    main_port=$(get_snell_port 2>/dev/null)
+    if [ -n "$main_port" ] && [ "$port" = "$main_port" ]; then
+        echo "snell"
+    else
+        echo "snell-${port}"
+    fi
+}
+
+# 指定通道当前被哪些服务使用（每行一个 systemd 服务名）
+list_services_using_version() {
+    local version="$1"
+    local conf_file port
+
+    if [ -f "$SNELL_CONF_FILE" ] && [ "$(get_conf_snell_version "$SNELL_CONF_FILE")" = "$version" ]; then
+        echo "snell"
+    fi
+
+    [ -d "${SNELL_CONF_DIR}/users" ] || return 0
+    for conf_file in "${SNELL_CONF_DIR}/users"/snell-*.conf; do
+        [ -f "$conf_file" ] || continue
+        case "$conf_file" in
+            *snell-main.conf) continue ;;
+        esac
+        port=$(grep -E '^listen' "$conf_file" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+        [ -n "$port" ] || continue
+        if [ "$(get_conf_snell_version "$conf_file")" = "$version" ]; then
+            echo "snell-${port}"
+        fi
+    done
+}
+
+# 让 snell-server 软链指向指定通道（旧探测逻辑与 ShadowTLS 仍依赖这个名字）
+update_snell_symlink() {
+    local version="$1"
+    local target
+    target=$(snell_binary_for_version "$version")
+
+    # 目标不存在时不动现场，避免把可用的旧二进制删成断链
+    if [ ! -x "$target" ]; then
+        return 1
+    fi
+
+    if [ -e "${INSTALL_DIR}/snell-server" ] && [ ! -L "${INSTALL_DIR}/snell-server" ]; then
+        rm -f "${INSTALL_DIR}/snell-server"
+    fi
+    ln -sfn "$target" "${INSTALL_DIR}/snell-server"
+}
+
+# 生成指定通道 + 版本号的下载地址；不支持的架构返回非 0（不 exit，调用方可继续）
+snell_download_url_for() {
+    local version_choice="$1"
+    local resolved_version="$2"
+    local arch
+    arch=$(uname -m)
+
+    if [ "$version_choice" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
+        echo -e "${RED}Snell v6 暂不提供 armv7l 构建${RESET}" >&2
+        return 1
+    fi
+
+    case "$arch" in
+        "x86_64"|"amd64")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-amd64.zip" ;;
+        "i386"|"i686")     echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-i386.zip" ;;
+        "aarch64"|"arm64") echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-aarch64.zip" ;;
+        "armv7l"|"armv7")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-armv7l.zip" ;;
+        *)
+            echo -e "${RED}不支持的架构: ${arch}${RESET}" >&2
+            return 1
+            ;;
+    esac
+}
+
+# 解析指定通道的最新版本号（失败时回落到内置常量）
+resolve_latest_version_for_channel() {
+    case "$1" in
+        v6) get_latest_snell_v6_version ;;
+        v5) get_latest_snell_v5_version ;;
+        v4) get_latest_snell_v4_version ;;
+        *)  return 1 ;;
+    esac
+}
+
+# 下载指定通道的二进制到版本化路径。force=true 时即使已存在也重新下载。
+# 只往 stderr 打印进度，stdout 留给调用方使用。
+install_snell_binary_for_version() {
+    local version="$1"
+    local force="${2:-false}"
+    local target
+    target=$(snell_binary_for_version "$version")
+
+    if [ -x "$target" ] && [ "$force" != "true" ]; then
+        return 0
+    fi
+
+    local resolved
+    resolved=$(resolve_latest_version_for_channel "$version")
+    if [ -z "$resolved" ]; then
+        echo -e "${RED}无法确定 Snell ${version} 的版本号${RESET}" >&2
+        return 1
+    fi
+
+    local url
+    if ! url=$(snell_download_url_for "$version" "$resolved"); then
+        return 1
+    fi
+
+    echo -e "${CYAN}正在下载 Snell ${version} (${resolved})...${RESET}" >&2
+    echo -e "${YELLOW}${url}${RESET}" >&2
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d) || return 1
+
+    local downloaded=false
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 2 -o "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
+    else
+        echo -e "${RED}系统缺少 wget 与 curl，无法下载${RESET}" >&2
+    fi
+
+    if [ "$downloaded" != "true" ]; then
+        echo -e "${RED}下载 Snell ${version} 失败: ${url}${RESET}" >&2
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if ! unzip -o -q "${tmp_dir}/snell-server.zip" -d "$tmp_dir"; then
+        echo -e "${RED}解压 Snell ${version} 失败${RESET}" >&2
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if [ ! -f "${tmp_dir}/snell-server" ]; then
+        echo -e "${RED}压缩包中未找到 snell-server 可执行文件${RESET}" >&2
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # install 是原子替换，正在运行的旧进程持有旧 inode，不受影响
+    if ! install -m 755 "${tmp_dir}/snell-server" "$target"; then
+        echo -e "${RED}写入 ${target} 失败${RESET}" >&2
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    rm -rf "$tmp_dir"
+
+    # 落盘后核验：装进来的确实是这个通道
+    local actual
+    actual=$(probe_snell_binary_version "$target")
+    if [ "$actual" != "$version" ]; then
+        echo -e "${YELLOW}警告：${target} 自报版本为 ${actual}，与预期的 ${version} 不一致${RESET}" >&2
+    fi
+
+    echo -e "${GREEN}✓ Snell ${version} (${resolved}) 已就位: ${target}${RESET}" >&2
+    return 0
+}
+
+# 确保指定通道可用，缺失时自动下载
+ensure_snell_binary() {
+    install_snell_binary_for_version "$1" "false"
+}
+
+# 主服务应使用的二进制路径（标记缺失或二进制未就位时回落到软链）
+main_snell_binary() {
+    local version target
+    version=$(get_conf_snell_version "$SNELL_CONF_FILE")
+    target=$(snell_binary_for_version "$version")
+    if [ -x "$target" ]; then
+        echo "$target"
+    else
+        echo "${INSTALL_DIR}/snell-server"
+    fi
+}
+
+# 把 unit 的 ExecStart 从裸 snell-server 切到版本化二进制。
+# 已经是版本化路径的会被跳过（模式带尾随空格，不会命中 snell-server-v5），因此可重复执行。
+sync_service_units_to_versioned_binary() {
+    local changed=false
+    local conf_file port unit version target
+
+    if [ -f "$SYSTEMD_SERVICE_FILE" ] && grep -q "ExecStart=${INSTALL_DIR}/snell-server " "$SYSTEMD_SERVICE_FILE"; then
+        version=$(get_conf_snell_version "$SNELL_CONF_FILE")
+        target=$(snell_binary_for_version "$version")
+        if [ -x "$target" ]; then
+            sed -i "s|ExecStart=${INSTALL_DIR}/snell-server |ExecStart=${target} |" "$SYSTEMD_SERVICE_FILE"
+            changed=true
+        fi
+    fi
+
+    if [ -d "${SNELL_CONF_DIR}/users" ]; then
+        for conf_file in "${SNELL_CONF_DIR}/users"/snell-*.conf; do
+            [ -f "$conf_file" ] || continue
+            case "$conf_file" in
+                *snell-main.conf) continue ;;
+            esac
+            port=$(grep -E '^listen' "$conf_file" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+            [ -n "$port" ] || continue
+            unit="${SYSTEMD_DIR}/snell-${port}.service"
+            [ -f "$unit" ] || continue
+            grep -q "ExecStart=${INSTALL_DIR}/snell-server " "$unit" || continue
+
+            version=$(get_conf_snell_version "$conf_file")
+            target=$(snell_binary_for_version "$version")
+            if [ -x "$target" ]; then
+                sed -i "s|ExecStart=${INSTALL_DIR}/snell-server |ExecStart=${target} |" "$unit"
+                changed=true
+            fi
+        done
+    fi
+
+    if [ "$changed" = "true" ]; then
+        systemctl daemon-reload 2>/dev/null || true
+        echo -e "${GREEN}✓ systemd 服务已切换到版本化二进制路径${RESET}"
+    fi
+}
+
+# 把一个 unit 的 ExecStart 指到目标通道的二进制（用于切换用户版本）
+point_service_unit_to_version() {
+    local unit="$1"
+    local version="$2"
+    local target
+    target=$(snell_binary_for_version "$version")
+
+    [ -f "$unit" ] || return 1
+    [ -x "$target" ] || return 1
+
+    sed -i -E "s|ExecStart=${INSTALL_DIR}/snell-server(-v[456])? |ExecStart=${target} |" "$unit"
+}
+
+# 老布局（唯一的 /usr/local/bin/snell-server 实体文件）迁移到按通道分开存。
+# 幂等：已经是软链且配置都带标记时，什么都不做。
+migrate_snell_binary_layout() {
+    local snell_bin="${INSTALL_DIR}/snell-server"
+    local main_version=""
+
+    if [ -e "$snell_bin" ] && [ ! -L "$snell_bin" ]; then
+        local detected versioned
+        detected=$(probe_snell_binary_version "$snell_bin")
+        if [ "$detected" = "unknown" ]; then
+            echo -e "${YELLOW}无法识别 ${snell_bin} 的版本，跳过二进制布局迁移${RESET}"
+            return 1
+        fi
+
+        versioned=$(snell_binary_for_version "$detected")
+        echo -e "${CYAN}检测到旧的单版本布局，正在迁移为多版本布局...${RESET}"
+        if [ ! -e "$versioned" ]; then
+            if ! cp -a "$snell_bin" "$versioned"; then
+                echo -e "${RED}复制二进制到 ${versioned} 失败，已保留原布局${RESET}"
+                return 1
+            fi
+        fi
+        chmod 755 "$versioned" 2>/dev/null || true
+        ln -sfn "$versioned" "$snell_bin"
+        echo -e "${GREEN}✓ ${snell_bin} 现在指向 ${versioned}（Snell ${detected}）${RESET}"
+        main_version="$detected"
+    elif [ -L "$snell_bin" ]; then
+        main_version=$(probe_snell_binary_version "$snell_bin")
+    fi
+
+    [ "$main_version" = "unknown" ] && main_version=""
+
+    # 给还没有版本标记的配置补上（老安装里所有用户必然同版本）
+    if [ -n "$main_version" ] && [ -d "${SNELL_CONF_DIR}/users" ]; then
+        local conf_file
+        for conf_file in "${SNELL_CONF_DIR}/users"/*.conf; do
+            [ -f "$conf_file" ] || continue
+            if read_conf_snell_version "$conf_file" >/dev/null 2>&1; then
+                continue
+            fi
+            if set_conf_snell_version "$conf_file" "$main_version"; then
+                echo -e "${GREEN}✓ 已为 $(basename "$conf_file") 标记版本 ${main_version}${RESET}"
+            fi
+        done
+    fi
+
+    sync_service_units_to_versioned_binary
+    return 0
+}
 
 ensure_snell_service_user() {
     if ! getent group "${SNELL_SERVICE_GROUP}" >/dev/null 2>&1; then
@@ -614,6 +1010,8 @@ validate_snell_main_config() {
 
 write_main_systemd_service() {
     ensure_snell_config_dir
+    local snell_binary
+    snell_binary=$(main_snell_binary)
     cat > ${SYSTEMD_SERVICE_FILE} << EOF
 [Unit]
 Description=Snell Proxy Service (Main)
@@ -624,7 +1022,7 @@ Type=simple
 User=${SNELL_SERVICE_USER}
 Group=${SNELL_SERVICE_GROUP}
 LimitNOFILE=32768
-ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+ExecStart=${snell_binary} -c ${SNELL_CONF_FILE}
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=on-failure
 RestartSec=2s
@@ -650,7 +1048,7 @@ sync_existing_main_service_unit() {
         return 0
     fi
 
-    if ! grep -q "ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}" "$SYSTEMD_SERVICE_FILE"; then
+    if ! grep -Eq "ExecStart=${INSTALL_DIR}/snell-server(-v[456])? -c ${SNELL_CONF_FILE}" "$SYSTEMD_SERVICE_FILE"; then
         return 0
     fi
 
@@ -818,7 +1216,7 @@ auto_update_script() {
     # 下载最新版本
     if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
         # 获取新版本号
-        new_version=$(grep "current_version=" "$TMP_SCRIPT" | cut -d'"' -f2)
+        new_version=$(grep -m1 -E '^current_version="' "$TMP_SCRIPT" | cut -d'"' -f2)
         
         # 比较版本号
         if [ "$new_version" != "$current_version" ]; then
@@ -1120,6 +1518,8 @@ EOF
 # 写入 socket activation 单元
 write_snell_socket_service_units() {
     local listen_port=$1
+    local snell_binary
+    snell_binary=$(main_snell_binary)
 
     cat > ${SYSTEMD_SOCKET_FILE} << EOF
 [Unit]
@@ -1159,7 +1559,7 @@ LimitNOFILE=32768
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
+ExecStart=${snell_binary} -c ${SNELL_CONF_FILE}
 Restart=on-failure
 RestartSec=2s
 StandardOutput=journal
@@ -1479,28 +1879,17 @@ install_snell() {
     wait_for_apt
     apt update && apt install -y wget unzip
 
-    get_latest_snell_version
-    ARCH=$(uname -m)
-    SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
+    # 若机器上还是旧的单版本布局，先迁成版本化布局，避免装新通道时覆盖掉在用的二进制
+    migrate_snell_binary_layout
 
-    echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
-    echo -e "${YELLOW}下载链接: ${SNELL_URL}${RESET}"
-    
-    # v4/v5/v6 均使用 zip 格式，统一处理
-    wget ${SNELL_URL} -O snell-server.zip
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
+    # 安装（或强制重装）所选通道的二进制，其他通道原样保留
+    if ! install_snell_binary_for_version "$SNELL_VERSION_CHOICE" "true"; then
+        echo -e "${RED}安装 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
         exit 1
     fi
 
-    unzip -o snell-server.zip -d ${INSTALL_DIR}
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}解压缩 Snell 失败。${RESET}"
-        exit 1
-    fi
-
-    rm snell-server.zip
-    chmod +x ${INSTALL_DIR}/snell-server
+    # 主用户所用通道决定 snell-server 软链指向
+    update_snell_symlink "$SNELL_VERSION_CHOICE"
 
     get_user_port  # 获取用户输入的端口
     get_dns # 获取用户输入的 DNS 服务器
@@ -1614,7 +2003,7 @@ install_snell() {
 
     # 输出 Surge 配置格式
     echo -e "\n${GREEN}Surge 配置格式：${RESET}"
-    local installed_version=$(detect_installed_snell_version)
+    local installed_version="$SNELL_VERSION_CHOICE"
     if [ ! -z "$IPV4_ADDR" ]; then
         generate_surge_config "$IPV4_ADDR" "$PORT" "$PSK" "$SNELL_VERSION_CHOICE" "$IP_COUNTRY_IPV4" "$installed_version"
     fi
@@ -1685,10 +2074,11 @@ configure_v5_egress_control() {
         return 1
     fi
 
+    # 出口控制作用于主服务，因此按主配置的通道判断
     local installed_version
-    installed_version=$(detect_installed_snell_version)
+    installed_version=$(get_conf_snell_version "$SNELL_CONF_FILE")
     if [ "$installed_version" != "v5" ] && [ "$installed_version" != "v6" ]; then
-        echo -e "${YELLOW}当前安装版本为 ${installed_version}，仅 Snell v5/v6 支持此设置。${RESET}"
+        echo -e "${YELLOW}主用户当前使用 ${installed_version}，仅 Snell v5/v6 支持此设置。${RESET}"
         return 1
     fi
 
@@ -1704,7 +2094,7 @@ configure_v5_egress_control() {
         egress_enabled="true"
     fi
 
-    echo -e "${GREEN}当前版本: Snell v5${RESET}"
+    echo -e "${GREEN}主用户版本: Snell ${installed_version}${RESET}"
     echo -e "${GREEN}主端口: ${main_port}${RESET}"
     if [ "$egress_enabled" = "true" ]; then
         echo -e "${YELLOW}当前出口控制状态: 已启用${RESET}"
@@ -1777,91 +2167,6 @@ configure_v5_egress_control() {
     esac
 }
 
-# 只更新 Snell 二进制文件，不覆盖配置
-update_snell_binary() {
-    echo -e "${CYAN}=============== Snell 更新 ===============${RESET}"
-    echo -e "${YELLOW}注意：这是更新操作，不是重新安装${RESET}"
-    echo -e "${GREEN}✓ 所有现有配置将被保留${RESET}"
-    echo -e "${GREEN}✓ 端口、密码、用户配置都不会改变${RESET}"
-    echo -e "${GREEN}✓ 服务会自动重启${RESET}"
-    echo -e "${CYAN}============================================${RESET}"
-    
-    echo -e "${CYAN}正在备份当前配置...${RESET}"
-    local backup_dir
-    backup_dir=$(backup_snell_config)
-    echo -e "${GREEN}配置已备份到: $backup_dir${RESET}"
-
-    echo -e "${CYAN}正在更新 Snell 二进制文件...${RESET}"
-    
-    # 获取最新版本信息（版本已在 check_snell_update 中确定）
-    get_latest_snell_version
-    ARCH=$(uname -m)
-    SNELL_URL=$(get_snell_download_url "$SNELL_VERSION_CHOICE")
-
-    echo -e "${CYAN}正在下载 Snell ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})...${RESET}"
-    
-    # v4/v5/v6 均使用 zip 格式，统一处理
-    wget ${SNELL_URL} -O snell-server.zip
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}下载 Snell ${SNELL_VERSION_CHOICE} 失败。${RESET}"
-        restore_snell_config "$backup_dir"
-        exit 1
-    fi
-
-    echo -e "${CYAN}正在替换 Snell 二进制文件...${RESET}"
-    unzip -o snell-server.zip -d ${INSTALL_DIR}
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}解压缩 Snell 失败。${RESET}"
-        restore_snell_config "$backup_dir"
-        exit 1
-    fi
-
-    rm snell-server.zip
-    chmod +x ${INSTALL_DIR}/snell-server
-
-    # 版本切换后同步配置参数（如 v4/v5 升级到 v6 需要 mode / dns-ip-preference）
-    echo -e "${CYAN}正在同步配置文件参数...${RESET}"
-    for conf_file in "${SNELL_CONF_DIR}/users"/*.conf; do
-        [ -f "$conf_file" ] || continue
-        migrate_snell_conf_for_version "$conf_file" "$SNELL_VERSION_CHOICE"
-    done
-
-    echo -e "${CYAN}正在重启 Snell 服务...${RESET}"
-    if ! validate_snell_main_config; then
-        restore_snell_config "$backup_dir"
-        return 1
-    fi
-
-    # 重启主服务
-    systemctl restart snell
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}主服务重启失败，尝试恢复配置...${RESET}"
-        restore_snell_config "$backup_dir"
-        if validate_snell_main_config; then
-            systemctl restart snell
-        fi
-    fi
-
-    # 重启所有多用户服务
-    if [ -d "${SNELL_CONF_DIR}/users" ]; then
-        for user_conf in "${SNELL_CONF_DIR}/users"/*; do
-            if [ -f "$user_conf" ] && [[ "$user_conf" != *"snell-main.conf" ]]; then
-                local port=$(grep -E '^listen' "$user_conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
-                if [ ! -z "$port" ]; then
-                    systemctl restart "snell-${port}" 2>/dev/null
-                fi
-            fi
-        done
-    fi
-    
-    echo -e "${CYAN}============================================${RESET}"
-    echo -e "${GREEN}✅ Snell 更新完成！${RESET}"
-    echo -e "${GREEN}✓ 版本已更新到: ${SNELL_VERSION_CHOICE} (${SNELL_VERSION})${RESET}"
-    echo -e "${GREEN}✓ 所有配置已保留${RESET}"
-    echo -e "${GREEN}✓ 服务已重启${RESET}"
-    echo -e "${YELLOW}配置备份目录: $backup_dir${RESET}"
-    echo -e "${CYAN}============================================${RESET}"
-}
 
 # 卸载 Snell
 uninstall_snell() {
@@ -1918,8 +2223,13 @@ uninstall_snell() {
     rm -f ${SYSTEMD_NETNS_FILE}
     rm -f ${NETNS_SETUP_SCRIPT}
 
-    # 删除可执行文件和配置目录
-    rm -f /usr/local/bin/snell-server
+    # 删除各通道二进制、软链与更新时留下的备份
+    local version
+    for version in $SNELL_ALL_VERSIONS; do
+        rm -f "$(snell_binary_for_version "$version")"
+    done
+    rm -f "${INSTALL_DIR}"/snell-server-v[456].bak.*
+    rm -f ${INSTALL_DIR}/snell-server
     rm -rf ${SNELL_CONF_DIR}
     rm -f /usr/local/bin/snell  # 删除管理脚本
 
@@ -2046,6 +2356,16 @@ check_and_show_status() {
         # 显示 Snell 状态
         local total_snell_memory_mb=$(echo "scale=2; $total_snell_memory/1024" | bc)
         printf "${GREEN}Snell 已安装${RESET}  ${YELLOW}CPU：%.2f%%${RESET}  ${YELLOW}内存：%.2f MB${RESET}  ${GREEN}运行中：${running_count}/${user_count}${RESET}\n" "$total_snell_cpu" "$total_snell_memory_mb"
+
+        # 已安装的通道，以及各自被多少个服务使用
+        local installed_channels channel channel_summary=""
+        installed_channels=$(list_installed_snell_versions)
+        if [ -n "$installed_channels" ]; then
+            for channel in $installed_channels; do
+                channel_summary="${channel_summary}${channel}(×$(list_services_using_version "$channel" | grep -c .)) "
+            done
+            echo -e "${GREEN}已安装通道${RESET}  ${YELLOW}${channel_summary}${RESET}"
+        fi
     else
         echo -e "${YELLOW}Snell 未安装${RESET}"
     fi
@@ -2108,10 +2428,13 @@ view_snell_config() {
     echo -e "${GREEN}Snell 配置信息:${RESET}"
     echo -e "${CYAN}================================${RESET}"
     
-    # 检测当前安装的 Snell 版本
-    local installed_version=$(detect_installed_snell_version)
-    if [ "$installed_version" != "unknown" ]; then
-        echo -e "${YELLOW}当前安装版本: Snell ${installed_version}${RESET}"
+    # 每个用户可以用不同通道，这里只列出机器上装了哪些
+    local installed_channels
+    installed_channels=$(list_installed_snell_versions)
+    if [ -n "$installed_channels" ]; then
+        echo -e "${YELLOW}已安装通道: ${installed_channels}${RESET}"
+    else
+        echo -e "${YELLOW}未检测到已安装的 Snell 通道${RESET}"
     fi
     
     # 获取 IPv4 地址
@@ -2146,8 +2469,10 @@ view_snell_config() {
         local main_dns=$(grep -E '^[[:space:]]*dns[[:space:]]*=' "$main_conf" | awk -F'=' '{print $2}' | tr -d ' ')
         local main_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$main_conf" | awk -F'=' '{print $2}' | tr -d ' ')
         local main_dns_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$main_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+        local main_version=$(get_conf_snell_version "$main_conf")
 
         echo -e "${YELLOW}端口: ${main_port}${RESET}"
+        echo -e "${YELLOW}版本: Snell ${main_version}${RESET}"
         echo -e "${YELLOW}PSK: ${main_psk}${RESET}"
         [ -n "$main_ipv6" ] && echo -e "${YELLOW}IPv6: ${main_ipv6}${RESET}"
         [ -n "$main_mode" ] && echo -e "${YELLOW}模式 (mode): ${main_mode}${RESET}"
@@ -2156,10 +2481,10 @@ view_snell_config() {
         
         echo -e "\n${GREEN}Surge 配置格式：${RESET}"
         if [ ! -z "$IPV4_ADDR" ]; then
-            generate_surge_config "$IPV4_ADDR" "$main_port" "$main_psk" "$installed_version" "$IP_COUNTRY_IPV4" "$installed_version"
+            generate_surge_config "$IPV4_ADDR" "$main_port" "$main_psk" "$main_version" "$IP_COUNTRY_IPV4" "$main_version"
         fi
         if [ ! -z "$IPV6_ADDR" ]; then
-            generate_surge_config "$IPV6_ADDR" "$main_port" "$main_psk" "$installed_version" "$IP_COUNTRY_IPV6" "$installed_version"
+            generate_surge_config "$IPV6_ADDR" "$main_port" "$main_psk" "$main_version" "$IP_COUNTRY_IPV6" "$main_version"
         fi
     fi
     
@@ -2173,8 +2498,10 @@ view_snell_config() {
                 local user_dns=$(grep -E '^[[:space:]]*dns[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
                 local user_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
                 local user_dns_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+                local user_version=$(get_conf_snell_version "$user_conf")
 
                 echo -e "\n${GREEN}用户配置 (端口: ${user_port}):${RESET}"
+                echo -e "${YELLOW}版本: Snell ${user_version}${RESET}"
                 echo -e "${YELLOW}PSK: ${user_psk}${RESET}"
                 [ -n "$user_ipv6" ] && echo -e "${YELLOW}IPv6: ${user_ipv6}${RESET}"
                 [ -n "$user_mode" ] && echo -e "${YELLOW}模式 (mode): ${user_mode}${RESET}"
@@ -2183,17 +2510,16 @@ view_snell_config() {
                 
                 echo -e "\n${GREEN}Surge 配置格式：${RESET}"
                 if [ ! -z "$IPV4_ADDR" ]; then
-                    generate_surge_config "$IPV4_ADDR" "$user_port" "$user_psk" "$installed_version" "$IP_COUNTRY_IPV4" "$installed_version"
+                    generate_surge_config "$IPV4_ADDR" "$user_port" "$user_psk" "$user_version" "$IP_COUNTRY_IPV4" "$user_version"
                 fi
                 if [ ! -z "$IPV6_ADDR" ]; then
-                    generate_surge_config "$IPV6_ADDR" "$user_port" "$user_psk" "$installed_version" "$IP_COUNTRY_IPV6" "$installed_version"
+                    generate_surge_config "$IPV6_ADDR" "$user_port" "$user_psk" "$user_version" "$IP_COUNTRY_IPV6" "$user_version"
                 fi
             fi
         done
     fi
     
-    # 如果 ShadowTLS 已安装，显示组合配置
-    local snell_version=$(detect_installed_snell_version)
+    # 如果 ShadowTLS 已安装，显示组合配置（版本按后端端口各自的通道取）
     local snell_services=$(find /etc/systemd/system -name "shadowtls-snell-*.service" 2>/dev/null | sort -u)
     if [ ! -z "$snell_services" ]; then
         echo -e "\n${YELLOW}=== ShadowTLS 组合配置 ===${RESET}"
@@ -2216,6 +2542,8 @@ view_snell_config() {
                 continue
             fi
             processed_ports[$snell_port]=1
+            local snell_version=$(get_port_snell_version "$snell_port")
+            local snell_mode=$(get_snell_mode "$(snell_conf_for_port "$snell_port")")
             if [ "$snell_port" = "$(get_snell_port)" ]; then
                 echo -e "\n${GREEN}主用户 ShadowTLS 配置：${RESET}"
             else
@@ -2227,10 +2555,11 @@ view_snell_config() {
             echo -e "  - ShadowTLS 密码：${stls_password}"
             echo -e "  - ShadowTLS SNI：${stls_domain}"
             echo -e "  - 版本：3"
+            echo -e "  - Snell 版本：${snell_version}"
             echo -e "\n${GREEN}Surge 配置格式：${RESET}"
             if [ ! -z "$IPV4_ADDR" ]; then
                 if [ "$snell_version" = "v6" ]; then
-                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 6, mode = $(get_snell_mode), reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                    echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 6, mode = ${snell_mode}, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                 elif [ "$snell_version" = "v5" ]; then
                     echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                     echo -e "${GREEN}${IP_COUNTRY_IPV4} = snell, ${IPV4_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
@@ -2240,7 +2569,7 @@ view_snell_config() {
             fi
             if [ ! -z "$IPV6_ADDR" ]; then
                 if [ "$snell_version" = "v6" ]; then
-                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 6, mode = $(get_snell_mode), reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
+                    echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 6, mode = ${snell_mode}, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                 elif [ "$snell_version" = "v5" ]; then
                     echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
                     echo -e "${GREEN}${IP_COUNTRY_IPV6} = snell, ${IPV6_ADDR}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3${RESET}"
@@ -2257,141 +2586,435 @@ view_snell_config() {
     read -p "按任意键返回主菜单..."
 }
 
-# 获取当前安装的 Snell 版本
-get_current_snell_version() {
-    local current_installed_version=$(detect_installed_snell_version)
+# =========================================
+# Snell 版本管理：按通道更新 / 追加通道 / 切换用户通道
+# =========================================
+# 读取某通道二进制自报的具体版本号（如 v5.0.1）
+get_channel_binary_version() {
+    local version="$1"
+    local binary
+    binary=$(snell_binary_for_version "$version")
+    [ -x "$binary" ] || return 1
 
-    if [ "$current_installed_version" = "v6" ] || [ "$current_installed_version" = "v5" ]; then
-        CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+[a-z0-9]*')
-        if [ -z "$CURRENT_VERSION" ]; then
-            if [ "$current_installed_version" = "v6" ]; then
-                CURRENT_VERSION="$SNELL_V6_FALLBACK"
-            else
-                CURRENT_VERSION="$SNELL_V5_FALLBACK"
-            fi
+    local detail
+    detail=$("$binary" --v 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9]*' | head -n 1)
+    if [ -z "$detail" ]; then
+        # 早期 v4 的 --v 不打印版本号，用内置常量兜底
+        case "$version" in
+            v4) detail="$SNELL_V4_FALLBACK" ;;
+            v5) detail="$SNELL_V5_FALLBACK" ;;
+            v6) detail="$SNELL_V6_FALLBACK" ;;
+        esac
+    fi
+    echo "$detail"
+}
+
+# 重启服务并确认真的起来了；起不来打印日志尾部，不让用户自己翻
+restart_and_verify_service() {
+    local service="$1"
+    local waited=0
+
+    if ! systemctl restart "$service" 2>/dev/null; then
+        echo -e "${RED}systemctl restart ${service} 返回失败${RESET}"
+        journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
+        return 1
+    fi
+
+    while [ "$waited" -lt 10 ]; do
+        if systemctl is-active --quiet "$service"; then
+            return 0
         fi
+        # socket 激活场景下主服务按需拉起，socket 活着即视为正常
+        if [ "$service" = "snell" ] && systemctl is-active --quiet snell.socket; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo -e "${RED}${service} 在 ${waited} 秒内未进入 active 状态${RESET}"
+    journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
+    return 1
+}
+
+# 更新单个通道的二进制到最新版本。
+# 不改动任何用户的通道归属，配置格式因此不变，只重启用到该通道的服务。
+update_snell_channel() {
+    local version="$1"
+    local target
+    target=$(snell_binary_for_version "$version")
+
+    echo -e "\n${CYAN}=============== 更新 Snell ${version} 通道 ===============${RESET}"
+    echo -e "${GREEN}✓ 只替换 ${version} 的二进制，其他通道原样不动${RESET}"
+    echo -e "${GREEN}✓ 端口、密码、用户配置都不会改变${RESET}"
+
+    local services
+    services=$(list_services_using_version "$version")
+    if [ -n "$services" ]; then
+        echo -e "${YELLOW}将重启：$(echo "$services" | tr '\n' ' ')${RESET}"
     else
-        CURRENT_VERSION=$(snell-server --v 2>&1 | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+')
-        if [ -z "$CURRENT_VERSION" ]; then
-            echo -e "${RED}无法获取当前 Snell 版本。${RESET}"
-            exit 1
+        echo -e "${YELLOW}当前没有服务在使用 ${version} 通道，仅更新二进制${RESET}"
+    fi
+
+    # 配置与二进制各留一个回滚点
+    local backup_dir
+    backup_dir=$(backup_snell_config)
+    echo -e "${GREEN}配置已备份到: ${backup_dir}${RESET}"
+
+    local backup_binary=""
+    if [ -f "$target" ]; then
+        backup_binary="${target}.bak.$(date +%Y%m%d_%H%M%S)"
+        if cp -a "$target" "$backup_binary"; then
+            echo -e "${GREEN}原二进制已备份到: ${backup_binary}${RESET}"
+        else
+            echo -e "${YELLOW}警告：二进制备份失败，更新失败时将无法自动回滚${RESET}"
+            backup_binary=""
         fi
+    fi
+
+    if ! install_snell_binary_for_version "$version" "true"; then
+        if [ -n "$backup_binary" ]; then
+            cp -a "$backup_binary" "$target" && echo -e "${YELLOW}已回滚到更新前的二进制${RESET}"
+        fi
+        return 1
+    fi
+
+    # 主用户用的就是这个通道时，软链跟着走
+    if [ "$(get_conf_snell_version "$SNELL_CONF_FILE")" = "$version" ]; then
+        update_snell_symlink "$version"
+    fi
+
+    local service failed=""
+    while IFS= read -r service; do
+        [ -n "$service" ] || continue
+        if [ "$service" = "snell" ] && ! validate_snell_main_config; then
+            failed="${failed}${service} "
+            continue
+        fi
+        echo -e "${CYAN}正在重启 ${service}...${RESET}"
+        if ! restart_and_verify_service "$service"; then
+            failed="${failed}${service} "
+        fi
+    done <<< "$services"
+
+    if [ -n "$failed" ]; then
+        echo -e "\n${RED}以下服务未能正常启动: ${failed}${RESET}"
+        if [ -n "$backup_binary" ]; then
+            echo -e "${YELLOW}正在回滚 ${version} 通道的二进制...${RESET}"
+            cp -a "$backup_binary" "$target"
+            for service in $failed; do
+                systemctl restart "$service" 2>/dev/null
+            done
+            echo -e "${YELLOW}已回滚。配置备份仍保留在 ${backup_dir}${RESET}"
+        fi
+        return 1
+    fi
+
+    echo -e "${CYAN}============================================${RESET}"
+    echo -e "${GREEN}✅ Snell ${version} 通道更新完成（$(get_channel_binary_version "$version")）${RESET}"
+    echo -e "${GREEN}✓ 其他通道与全部配置未受影响${RESET}"
+    echo -e "${YELLOW}配置备份目录: ${backup_dir}${RESET}"
+    echo -e "${CYAN}============================================${RESET}"
+
+    # 回滚点的使命到此结束，删掉避免 ${INSTALL_DIR} 里越积越多
+    [ -n "$backup_binary" ] && rm -f "$backup_binary"
+    return 0
+}
+
+# 切换/回滚用的备份统一放在 ${SNELL_CONF_DIR}/backup 下。
+# 不能放进 users/ —— 多处循环是按 users/* 遍历的，备份文件会被当成真实用户。
+snell_backup_path() {
+    local src="$1"
+    local stamp="$2"
+    local dir="${SNELL_CONF_DIR}/backup"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    echo "${dir}/$(basename "$src").${stamp}"
+}
+
+# 把一个配置切换到目标通道：备好二进制 -> 迁移配置参数 -> 改 unit -> 重启，失败自动回滚
+switch_conf_to_version() {
+    local conf_file="$1"
+    local target_version="$2"
+    local port service unit current_version
+
+    if [ ! -f "$conf_file" ]; then
+        echo -e "${RED}配置不存在: ${conf_file}${RESET}"
+        return 1
+    fi
+
+    current_version=$(get_conf_snell_version "$conf_file")
+    port=$(grep -E '^listen' "$conf_file" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+    if [ -z "$port" ]; then
+        echo -e "${RED}无法从 ${conf_file} 解析监听端口${RESET}"
+        return 1
+    fi
+
+    if [ "$current_version" = "$target_version" ]; then
+        echo -e "${YELLOW}端口 ${port} 已经在 ${target_version} 通道，无需切换${RESET}"
+        return 0
+    fi
+
+    service=$(snell_service_for_port "$port")
+    if [ "$service" = "snell" ]; then
+        unit="$SYSTEMD_SERVICE_FILE"
+    else
+        unit="${SYSTEMD_DIR}/snell-${port}.service"
+    fi
+
+    if [ ! -f "$unit" ]; then
+        echo -e "${RED}未找到服务文件: ${unit}${RESET}"
+        return 1
+    fi
+
+    if ! ensure_snell_binary "$target_version"; then
+        return 1
+    fi
+
+    # v6 的 mode / dns-ip-preference 按这个用户单独选
+    if [ "$target_version" = "v6" ]; then
+        configure_snell_v6_options "$conf_file"
+    fi
+
+    local stamp backup_conf backup_unit
+    stamp=$(date +%Y%m%d_%H%M%S)
+    backup_conf=$(snell_backup_path "$conf_file" "$stamp")
+    if [ -z "$backup_conf" ] || ! cp -a "$conf_file" "$backup_conf"; then
+        echo -e "${RED}备份配置失败，已中止切换${RESET}"
+        SNELL_V6_OPTIONS_SET="false"
+        return 1
+    fi
+    backup_unit=$(snell_backup_path "$unit" "$stamp")
+    cp -a "$unit" "$backup_unit" 2>/dev/null || backup_unit=""
+
+    echo -e "${CYAN}正在把端口 ${port} 从 ${current_version} 切换到 ${target_version}...${RESET}"
+
+    migrate_snell_conf_for_version "$conf_file" "$target_version"
+    point_service_unit_to_version "$unit" "$target_version"
+    systemctl daemon-reload 2>/dev/null || true
+    if [ "$service" = "snell" ]; then
+        update_snell_symlink "$target_version"
+    fi
+
+    if restart_and_verify_service "$service"; then
+        echo -e "${GREEN}✓ 端口 ${port} 已切换到 Snell ${target_version}${RESET}"
+        echo -e "${YELLOW}客户端请把该节点的 version 改为 ${target_version#v}${RESET}"
+        if [ "$target_version" = "v6" ]; then
+            echo -e "${YELLOW}并补上 mode = $(get_snell_mode "$conf_file")${RESET}"
+        fi
+        echo -e "${YELLOW}回滚备份: ${backup_conf}${RESET}"
+        SNELL_V6_OPTIONS_SET="false"
+        return 0
+    fi
+
+    echo -e "${RED}切换后服务未能启动，正在回滚到 ${current_version}...${RESET}"
+    cat "$backup_conf" > "$conf_file"
+    [ -n "$backup_unit" ] && cat "$backup_unit" > "$unit"
+    systemctl daemon-reload 2>/dev/null || true
+    if [ "$service" = "snell" ]; then
+        update_snell_symlink "$current_version"
+    fi
+    if restart_and_verify_service "$service"; then
+        echo -e "${YELLOW}已回滚到 ${current_version}，服务恢复正常${RESET}"
+    else
+        echo -e "${RED}回滚后服务仍未启动，请手动检查: systemctl status ${service}${RESET}"
+    fi
+    SNELL_V6_OPTIONS_SET="false"
+    return 1
+}
+
+# 逐个检查已安装通道是否有新版本
+update_installed_channels() {
+    local installed
+    installed=$(list_installed_snell_versions)
+    if [ -z "$installed" ]; then
+        echo -e "${RED}未检测到已安装的通道${RESET}"
+        return 1
+    fi
+
+    local version current latest updated=0
+    for version in $installed; do
+        current=$(get_channel_binary_version "$version")
+        latest=$(resolve_latest_version_for_channel "$version")
+        echo -e "\n${CYAN}--- ${version} 通道 ---${RESET}"
+        echo -e "${YELLOW}当前: ${current:-未知}   最新: ${latest:-未知}${RESET}"
+
+        if [ -z "$latest" ]; then
+            echo -e "${YELLOW}无法获取最新版本，跳过${RESET}"
+            continue
+        fi
+        if [ -n "$current" ] && version_greater_equal "$current" "$latest"; then
+            echo -e "${GREEN}已是最新${RESET}"
+            continue
+        fi
+
+        echo -e "${CYAN}发现新版本，是否更新 ${version} 通道? [y/N]${RESET}"
+        read -r choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            update_snell_channel "$version" && updated=$((updated + 1))
+        else
+            echo -e "${CYAN}已跳过 ${version}${RESET}"
+        fi
+    done
+
+    echo -e "\n${GREEN}检查完成，本次更新了 ${updated} 个通道${RESET}"
+}
+
+# 安装一个新通道，只落盘二进制，不改动任何现有用户
+install_extra_channel() {
+    local installed missing version
+    installed=" $(list_installed_snell_versions) "
+    missing=""
+    for version in $SNELL_ALL_VERSIONS; do
+        case "$installed" in
+            *" ${version} "*) ;;
+            *) missing="${missing}${version} " ;;
+        esac
+    done
+    missing="${missing% }"
+
+    if [ -z "$missing" ]; then
+        echo -e "${GREEN}v4 / v5 / v6 三个通道都已安装${RESET}"
+        return 0
+    fi
+
+    echo -e "\n${YELLOW}尚未安装的通道：${missing}${RESET}"
+    echo -e "${CYAN}装好后可在「多用户管理」里给具体端口选用，或用本菜单的「切换通道」${RESET}"
+    local idx=1
+    local options=()
+    for version in $missing; do
+        echo -e "${GREEN}${idx}.${RESET} 安装 Snell ${version}"
+        options+=("$version")
+        idx=$((idx + 1))
+    done
+    echo -e "${GREEN}0.${RESET} 返回"
+
+    read -rp "请输入选项 [0-$((idx - 1))]: " pick
+    if [ "$pick" = "0" ] || [ -z "$pick" ]; then
+        return 0
+    fi
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt "${#options[@]}" ]; then
+        echo -e "${RED}无效选项${RESET}"
+        return 1
+    fi
+
+    local target="${options[$((pick - 1))]}"
+    if install_snell_binary_for_version "$target" "true"; then
+        echo -e "${GREEN}✓ Snell ${target} 已就绪，现有服务未受任何影响${RESET}"
+    else
+        return 1
     fi
 }
 
-# 检查 Snell 更新
-check_snell_update() {
-    echo -e "\n${CYAN}=============== 检查 Snell 更新 ===============${RESET}"
-    
-    # 检测当前安装的 Snell 版本
-    local current_installed_version=$(detect_installed_snell_version)
-    if [ "$current_installed_version" = "unknown" ]; then
-        echo -e "${RED}无法检测当前 Snell 版本${RESET}"
+# 切换某个用户（含主用户）所使用的通道
+switch_user_channel() {
+    local conf_file port version
+    local confs=()
+    local labels=()
+
+    if [ -f "$SNELL_CONF_FILE" ]; then
+        port=$(grep -E '^listen' "$SNELL_CONF_FILE" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+        version=$(get_conf_snell_version "$SNELL_CONF_FILE")
+        confs+=("$SNELL_CONF_FILE")
+        labels+=("主用户 (端口 ${port}) 当前: ${version}")
+    fi
+
+    if [ -d "${SNELL_CONF_DIR}/users" ]; then
+        for conf_file in "${SNELL_CONF_DIR}/users"/snell-*.conf; do
+            [ -f "$conf_file" ] || continue
+            case "$conf_file" in
+                *snell-main.conf) continue ;;
+            esac
+            port=$(grep -E '^listen' "$conf_file" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+            [ -n "$port" ] || continue
+            version=$(get_conf_snell_version "$conf_file")
+            confs+=("$conf_file")
+            labels+=("用户 (端口 ${port}) 当前: ${version}")
+        done
+    fi
+
+    if [ "${#confs[@]}" -eq 0 ]; then
+        echo -e "${RED}没有可切换的用户${RESET}"
         return 1
     fi
-    
-    echo -e "${YELLOW}当前安装版本: Snell ${current_installed_version}${RESET}"
-    
-    # 根据当前版本确定更新策略
-    if [ "$current_installed_version" = "v4" ]; then
-        # v4 用户：可升级到 v5 或 v6，或继续检查 v4 更新
-        echo -e "\n${CYAN}检测到您当前使用的是 Snell v4，请选择目标版本：${RESET}"
-        echo -e "${YELLOW}注意：v5/v6 为新版本，升级前请确认客户端支持${RESET}"
-        echo -e "${GREEN}1.${RESET} 升级到 Snell v5"
-        echo -e "${GREEN}2.${RESET} 升级到 Snell v6 (RC)"
-        echo -e "${GREEN}3.${RESET} 继续使用 Snell v4（检查 v4 更新）"
-        echo -e "${GREEN}4.${RESET} 取消更新"
 
-        while true; do
-            read -rp "请选择 [1-4]: " upgrade_choice
-            case "$upgrade_choice" in
-                1)
-                    SNELL_VERSION_CHOICE="v5"
-                    echo -e "${GREEN}已选择升级到 Snell v5${RESET}"
-                    break
-                    ;;
-                2)
-                    SNELL_VERSION_CHOICE="v6"
-                    echo -e "${GREEN}已选择升级到 Snell v6 (RC)${RESET}"
-                    echo -e "${YELLOW}注意：v6 仍为预发布版本，协议可能存在不兼容更新，且已移除 QUIC 代理模式与 obfs${RESET}"
-                    configure_snell_v6_options "$SNELL_CONF_FILE"
-                    break
-                    ;;
-                3)
-                    SNELL_VERSION_CHOICE="v4"
-                    echo -e "${GREEN}已选择继续使用 Snell v4${RESET}"
-                    break
-                    ;;
-                4)
-                    echo -e "${CYAN}已取消更新${RESET}"
-                    return 0
-                    ;;
-                *)
-                    echo -e "${RED}请输入正确的选项 [1-4]${RESET}"
-                    ;;
-            esac
-        done
-    elif [ "$current_installed_version" = "v5" ]; then
-        # v5 用户：可升级到 v6 或继续检查 v5 更新
-        echo -e "\n${CYAN}检测到您当前使用的是 Snell v5，请选择目标版本：${RESET}"
-        echo -e "${GREEN}1.${RESET} 升级到 Snell v6 (RC)"
-        echo -e "${GREEN}2.${RESET} 继续使用 Snell v5（检查 v5 更新）"
-        echo -e "${GREEN}3.${RESET} 取消更新"
+    echo -e "\n${YELLOW}=== 选择要切换通道的用户 ===${RESET}"
+    local idx=1
+    for label in "${labels[@]}"; do
+        echo -e "${GREEN}${idx}.${RESET} ${label}"
+        idx=$((idx + 1))
+    done
+    echo -e "${GREEN}0.${RESET} 返回"
 
-        while true; do
-            read -rp "请选择 [1-3]: " upgrade_choice
-            case "$upgrade_choice" in
-                1)
-                    SNELL_VERSION_CHOICE="v6"
-                    echo -e "${GREEN}已选择升级到 Snell v6 (RC)${RESET}"
-                    echo -e "${YELLOW}注意：v6 仍为预发布版本，协议可能存在不兼容更新，且已移除 QUIC 代理模式与 obfs${RESET}"
-                    configure_snell_v6_options "$SNELL_CONF_FILE"
-                    break
-                    ;;
-                2)
-                    SNELL_VERSION_CHOICE="v5"
-                    echo -e "${GREEN}已选择继续使用 Snell v5${RESET}"
-                    break
-                    ;;
-                3)
-                    echo -e "${CYAN}已取消更新${RESET}"
-                    return 0
-                    ;;
-                *)
-                    echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
-                    ;;
-            esac
-        done
-    else
-        # v6 用户：直接检查 v6 更新
-        SNELL_VERSION_CHOICE="v6"
-        echo -e "${GREEN}当前为 Snell v6，将检查 v6 更新${RESET}"
+    read -rp "请输入选项 [0-$((idx - 1))]: " pick
+    if [ "$pick" = "0" ] || [ -z "$pick" ]; then
+        return 0
     fi
-    
-    # 获取最新版本信息
-    get_latest_snell_version
-    get_current_snell_version
-
-    echo -e "${YELLOW}当前 Snell 版本: ${CURRENT_VERSION}${RESET}"
-    echo -e "${YELLOW}最新 Snell 版本: ${SNELL_VERSION}${RESET}"
-
-    # 检查是否需要更新
-    if ! version_greater_equal "$CURRENT_VERSION" "$SNELL_VERSION"; then
-        echo -e "\n${CYAN}发现新版本，更新说明：${RESET}"
-        echo -e "${GREEN}✓ 这是更新操作，不是重新安装${RESET}"
-        echo -e "${GREEN}✓ 所有现有配置将被保留（端口、密码、用户配置）${RESET}"
-        echo -e "${GREEN}✓ 服务会自动重启${RESET}"
-        echo -e "${GREEN}✓ 配置文件会自动备份${RESET}"
-        echo -e "${CYAN}是否更新 Snell? [y/N]${RESET}"
-        read -r choice
-        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            update_snell_binary
-        else
-            echo -e "${CYAN}已取消更新。${RESET}"
-        fi
-    else
-        echo -e "${GREEN}当前已是最新版本 (${CURRENT_VERSION})。${RESET}"
+    if ! [[ "$pick" =~ ^[0-9]+$ ]] || [ "$pick" -lt 1 ] || [ "$pick" -gt "${#confs[@]}" ]; then
+        echo -e "${RED}无效选项${RESET}"
+        return 1
     fi
+
+    local selected="${confs[$((pick - 1))]}"
+    local current
+    current=$(get_conf_snell_version "$selected")
+
+    echo -e "\n${YELLOW}=== 选择目标通道（当前 ${current}）===${RESET}"
+    echo -e "${GREEN}1.${RESET} Snell v4"
+    echo -e "${GREEN}2.${RESET} Snell v5"
+    echo -e "${GREEN}3.${RESET} Snell v6 (RC)"
+    echo -e "${GREEN}0.${RESET} 返回"
+    read -rp "请输入选项 [0-3]: " target_pick
+
+    local target=""
+    case "$target_pick" in
+        1) target="v4" ;;
+        2) target="v5" ;;
+        3)
+            target="v6"
+            echo -e "${YELLOW}注意：v6 仍为预发布版本，已移除 QUIC 代理模式与 obfs${RESET}"
+            ;;
+        0|"") return 0 ;;
+        *) echo -e "${RED}无效选项${RESET}"; return 1 ;;
+    esac
+
+    switch_conf_to_version "$selected" "$target"
+}
+
+# Snell 版本管理入口（原「更新 Snell」）
+check_snell_update() {
+    echo -e "\n${CYAN}=============== Snell 版本管理 ===============${RESET}"
+
+    # 老的单版本布局先迁移，否则下面按通道展示会看不到东西
+    migrate_snell_binary_layout
+
+    local installed
+    installed=$(list_installed_snell_versions)
+    if [ -z "$installed" ]; then
+        echo -e "${RED}未检测到任何已安装的 Snell 通道，请先执行安装。${RESET}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}已安装通道：${RESET}"
+    local version svc_count svc_list
+    for version in $installed; do
+        svc_list=$(list_services_using_version "$version")
+        svc_count=$(echo "$svc_list" | grep -c .)
+        echo -e "  ${GREEN}${version}${RESET}  版本: $(get_channel_binary_version "$version")  使用中: ${svc_count} 个服务"
+    done
+
+    echo -e "\n${GREEN}1.${RESET} 检查并更新已安装通道"
+    echo -e "${GREEN}2.${RESET} 安装一个新通道（只下载二进制，不影响现有用户）"
+    echo -e "${GREEN}3.${RESET} 切换某个用户使用的通道"
+    echo -e "${GREEN}0.${RESET} 返回"
+
+    read -rp "请输入选项 [0-3]: " manage_choice
+    case "$manage_choice" in
+        1) update_installed_channels ;;
+        2) install_extra_channel ;;
+        3) switch_user_channel ;;
+        0|"") echo -e "${CYAN}已返回${RESET}" ;;
+        *) echo -e "${RED}请输入正确的选项 [0-3]${RESET}" ;;
+    esac
 }
 
 # 获取最新 GitHub 版本
@@ -2422,7 +3045,7 @@ update_script() {
     # 下载最新版本
     if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
         # 获取新版本号
-        new_version=$(grep "current_version=" "$TMP_SCRIPT" | cut -d'"' -f2)
+        new_version=$(grep -m1 -E '^current_version="' "$TMP_SCRIPT" | cut -d'"' -f2)
         
         if [ -z "$new_version" ]; then
             echo -e "${RED}无法获取新版本信息${RESET}"
@@ -2529,6 +3152,10 @@ initial_check() {
     check_curl
     check_bc
     check_and_migrate_config
+    # 旧的单版本布局迁到按通道分开存；已经是新布局时什么都不做
+    if [ -e "${INSTALL_DIR}/snell-server" ]; then
+        migrate_snell_binary_layout
+    fi
     sync_existing_main_service_unit
     check_and_show_status
 }
@@ -2550,7 +3177,7 @@ setup_multi_user() {
 show_menu() {
     clear
     echo -e "${CYAN}============================================${RESET}"
-    echo -e "${CYAN}        Snell 管理脚本 v${current_version} (支持v4/v5/v6)${RESET}"
+    echo -e "${CYAN}    Snell 管理脚本 v${current_version} (v4/v5/v6 可共存)${RESET}"
     echo -e "${CYAN}============================================${RESET}"
     echo -e "${GREEN}作者: jinqian${RESET}"
     echo -e "${GREEN}网站：https://jinqians.com${RESET}"
@@ -2571,7 +3198,7 @@ show_menu() {
     echo -e "${GREEN}7.${RESET} 多用户管理"
     
     echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
-    echo -e "${GREEN}8.${RESET} 更新Snell"
+    echo -e "${GREEN}8.${RESET} 版本管理（更新 / 追加通道 / 切换通道）"
     echo -e "${GREEN}9.${RESET} 更新脚本"
     echo -e "${GREEN}10.${RESET} 查看服务状态"
     echo -e "${GREEN}11.${RESET} Snell v5/v6 出口控制设置"

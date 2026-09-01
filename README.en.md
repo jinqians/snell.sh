@@ -176,6 +176,7 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 - [About](#about)
 - [Usage](#usage)
   - [Script install](#1-script-install)
+    - [Running v4, v5 and v6 side by side](#running-v4-v5-and-v6-side-by-side)
   - [Docker](#2-docker)
   - [Docker Compose](#3-docker-compose)
   - [Viewing the client config](#4-viewing-the-client-config)
@@ -200,8 +201,9 @@ Capabilities:
 | Capability | Notes |
 |------------|-------|
 | Snell v4 / v5 / v6 | Pick any channel; scripts and images can switch between them |
+| **Side-by-side versions** | Different ports on the same host can run v4 / v5 / v6 independently (script install) |
 | ShadowTLS v3 | Wraps Snell in TLS camouflage and hides the raw port |
-| Multi-user | Multiple ports / PSKs on one host, managed separately |
+| Multi-user | Multiple ports / PSKs on one host, managed separately; each user picks its own version |
 | BBR | One-click BBR congestion control |
 | Egress control | `egress-interface` setting for Snell v5 / v6 |
 | Auto update | Scripts self-update; images track upstream weekly via GitHub Actions |
@@ -297,7 +299,7 @@ Snell script menu:
 
 ```
 === Basics ===          === Extras ===           === System ===
-1. Install Snell         5. ShadowTLS             8.  Update Snell
+1. Install Snell         5. ShadowTLS             8.  Version management
 2. Uninstall Snell       6. BBR                   9.  Update script
 3. Show config           7. Multi-user            10. Service status
 4. Restart service                                11. v5/v6 egress control
@@ -308,10 +310,66 @@ country tag, ready to copy:
 
 ```text
 === Config ===
-Installed version: Snell v5
+Installed channels: v4 v5 v6
+
+Main user:
+port: 57891
+version: Snell v5
 HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 4, reuse = true, tfo = true
 HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 5, reuse = true, tfo = true
+
+User (port 7000):
+version: Snell v6
+HK = snell, 1.2.3.4, 7000, psk = yyyyyyyyyyyy, version = 6, mode = default, reuse = true, tfo = true
 ```
+
+#### Running v4, v5 and v6 side by side
+
+The Debian / Ubuntu script keeps **one binary per channel**, and each systemd unit
+points at its own version, so ports never interfere with each other:
+
+```
+/usr/local/bin/snell-server-v4    # v4 channel
+/usr/local/bin/snell-server-v5    # v5 channel
+/usr/local/bin/snell-server-v6    # v6 channel
+/usr/local/bin/snell-server       # symlink to whatever the main user runs
+```
+
+Each user config records its channel on the first line:
+
+```ini
+#version-choice = v6
+[snell-server]
+listen = ::0:7000
+psk = ...
+mode = default
+```
+
+**Pick a version for a new port**: `7. Multi-user` → `2. Add user`. After entering the
+port you choose v4 / v5 / v6; a channel that is not installed yet is downloaded on the
+spot, and no other port is touched.
+
+**Change an existing port's version**: `7. Multi-user` → `4. Modify user` →
+`4. Change Snell version`. Config keys are converted automatically (`ipv6` for v4/v5,
+`mode` + `dns-ip-preference` for v6), and a failed switch rolls back by itself.
+
+**Main menu `8. Version management`** offers three actions:
+
+| Action | Notes |
+|--------|-------|
+| Update installed channels | Compares each channel against upstream, restarts only the services on that channel |
+| Install another channel | Downloads the binary only; no existing user is modified |
+| Switch a user's channel | Includes the main user; same as "Change Snell version" in the multi-user menu |
+
+> **Upgrading an existing install**: just run the new script. It migrates the single
+> `snell-server` binary into the per-channel layout and stamps every config with its
+> version, without interrupting the running services. The migration is idempotent.
+
+> **Update the client too**: v4 uses `version = 4`, v5 accepts `4` or `5`, and v6 needs
+> `version = 6` plus a `mode` matching the server.
+
+Alpine / CentOS scripts and the Docker path do not support side-by-side versions on one
+host — for containers, run one container per version instead.
 
 ### 2. Docker
 

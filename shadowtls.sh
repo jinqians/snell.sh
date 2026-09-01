@@ -27,6 +27,119 @@ USERS_DIR="${SNELL_CONF_DIR}/users"
 SNELL_SERVICE_USER="snell"
 SNELL_SERVICE_GROUP="snell"
 
+# =========================================
+# 读取 Snell 通道信息（与 snell.sh 的版本层保持一致的只读子集）
+# 每个用户配置首行的 "#version-choice = vX" 标明该端口跑的是哪个版本；
+# 没有标记时（尚未迁移的老安装）回落到 snell-server 软链自报的版本。
+# =========================================
+SNELL_VERSION_MARKER_KEY="version-choice"
+
+snell_binary_for_version() {
+    case "$1" in
+        v4|v5|v6) echo "${INSTALL_DIR}/snell-server-$1" ;;
+        *)        echo "${INSTALL_DIR}/snell-server" ;;
+    esac
+}
+
+probe_snell_binary_version() {
+    local binary="$1"
+    if [ ! -x "$binary" ]; then
+        echo "unknown"
+        return 1
+    fi
+
+    local version_output
+    version_output=$("$binary" --v 2>&1)
+    if echo "$version_output" | grep -q "v6"; then
+        echo "v6"
+    elif echo "$version_output" | grep -q "v5"; then
+        echo "v5"
+    else
+        echo "v4"
+    fi
+}
+
+detect_installed_snell_version() {
+    probe_snell_binary_version "${INSTALL_DIR}/snell-server"
+}
+
+read_conf_snell_version() {
+    local conf_file="$1"
+    [ -f "$conf_file" ] || return 1
+
+    local marked
+    marked=$(grep -E "^[[:space:]]*#[[:space:]]*${SNELL_VERSION_MARKER_KEY}[[:space:]]*=" "$conf_file" \
+        | head -n 1 | awk -F'=' '{print $2}' | tr -d '[:space:]')
+    case "$marked" in
+        v4|v5|v6) echo "$marked" ;;
+        *)        return 1 ;;
+    esac
+}
+
+get_conf_snell_version() {
+    local conf_file="$1"
+    local marked
+    if marked=$(read_conf_snell_version "$conf_file"); then
+        echo "$marked"
+        return 0
+    fi
+    detect_installed_snell_version
+}
+
+snell_conf_for_port() {
+    local port="$1"
+    local main_port
+    main_port=$(get_snell_port 2>/dev/null)
+    if [ -n "$main_port" ] && [ "$port" = "$main_port" ]; then
+        echo "$SNELL_CONF_FILE"
+    else
+        echo "${USERS_DIR}/snell-${port}.conf"
+    fi
+}
+
+# 后端端口 -> 该端口跑的 Snell 版本
+get_port_snell_version() {
+    get_conf_snell_version "$(snell_conf_for_port "$1")"
+}
+
+# 后端端口 -> v6 的 mode（客户端必须与服务端一致）
+get_port_snell_mode() {
+    local conf_file mode=""
+    conf_file=$(snell_conf_for_port "$1")
+    if [ -f "$conf_file" ]; then
+        mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+    fi
+    echo "${mode:-default}"
+}
+
+# 生成一个后端端口对应的 Surge 代理行（含 ShadowTLS 参数）
+print_snell_shadowtls_line() {
+    local label="$1"
+    local server_ip="$2"
+    local stls_port="$3"
+    local psk="$4"
+    local stls_password="$5"
+    local stls_sni="$6"
+    local backend_port="$7"
+
+    local version stls_suffix
+    version=$(get_port_snell_version "$backend_port")
+    stls_suffix="reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
+
+    case "$version" in
+        v6)
+            echo -e "${label} (v6) = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 6, mode = $(get_port_snell_mode "$backend_port"), ${stls_suffix}"
+            ;;
+        v5)
+            echo -e "${label} (v4) = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, ${stls_suffix}"
+            echo -e "${label} (v5) = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 5, ${stls_suffix}"
+            ;;
+        *)
+            echo -e "${label} (v4) = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, ${stls_suffix}"
+            ;;
+    esac
+}
+
 # 检查是否以 root 权限运行
 check_root() {
     if [ "$(id -u)" != "0" ]; then
@@ -474,22 +587,25 @@ restrict_snell_to_loopback() {
     echo -e "${GREEN}已关闭 Snell 原始端口 ${port} 的公网放行规则，客户端请连接 ShadowTLS 端口${RESET}"
 }
 
-# 获取 Snell 版本
+# 获取指定后端端口的 Snell 大版本号（4 / 5 / 6）
+# 不传端口时退回主用户端口。原实现只认 v4/v5，且对所有端口给同一个答案，
+# 在多版本共存下会把 v6 端口误报成 v4。
 get_snell_version() {
-    if ! command -v snell-server &> /dev/null; then
-        return 1
-    fi
-    
-    # 尝试获取版本信息
-    local version_output=$(snell-server --v 2>&1)
-    
-    # 检查是否为 v5 版本
-    if echo "$version_output" | grep -q "v5"; then
-        echo "5"
+    local port="${1:-$(get_snell_port)}"
+    local version
+
+    if [ -z "$port" ]; then
+        version=$(detect_installed_snell_version)
     else
-        # 默认为 v4 版本
-        echo "4"
+        version=$(get_port_snell_version "$port")
     fi
+
+    case "$version" in
+        v6) echo "6" ;;
+        v5) echo "5" ;;
+        v4) echo "4" ;;
+        *)  return 1 ;;
+    esac
 }
 
 # 获取服务器IP
@@ -716,8 +832,8 @@ generate_snell_links() {
     local stls_sni=$5
     local backend_port=$6
     
-    # 获取 Snell 版本
-    local snell_version=$(get_snell_version)
+    # 版本取自这个后端端口自己的通道
+    local snell_version=$(get_snell_version "$backend_port")
     
     echo -e "\n${YELLOW}=== 服务器配置 ===${RESET}"
     echo -e "服务器IP：${server_ip}"
@@ -733,13 +849,9 @@ generate_snell_links() {
     
     echo -e "\n${YELLOW}=== Surge 配置 ===${RESET}"
     
-    # v5 输出 v4/v5 两种格式，v4只输出v4
-    if [ "$snell_version" = "5" ]; then
-        echo -e "Snell v4 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
-        echo -e "Snell v5 + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
-    else
-        echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${listen_port}, psk = ${snell_psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_sni}, shadow-tls-version = 3"
-    fi
+    # v5 同时给出 v4/v5 两种写法；v6 需要额外带 mode
+    print_snell_shadowtls_line "Snell + ShadowTLS" "$server_ip" "$listen_port" "$snell_psk" \
+        "$stls_password" "$stls_sni" "$backend_port"
 }
 
 # 询问是否开启 wildcard-sni（默认关闭）
@@ -1252,13 +1364,9 @@ view_config() {
                             echo -e "  - 版本：3"
                             
                             echo -e "\n${GREEN}Surge 配置：${RESET}"
-                            local snell_version=$(get_snell_version)
-                            if [ "$snell_version" = "5" ]; then
-                                echo -e "Snell v4 + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
-                                echo -e "Snell v5 + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 5, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
-                            else
-                                echo -e "Snell + ShadowTLS = snell, ${server_ip}, ${stls_port}, psk = ${psk}, version = 4, reuse = true, tfo = true, shadow-tls-password = ${stls_password}, shadow-tls-sni = ${stls_domain}, shadow-tls-version = 3"
-                            fi
+                            echo -e "${YELLOW}Snell 版本：$(get_port_snell_version "$port")${RESET}"
+                            print_snell_shadowtls_line "Snell + ShadowTLS" "$server_ip" "$stls_port" "$psk" \
+                                "$stls_password" "$stls_domain" "$port"
                             
                             # 检查服务状态
                             local service_status=$(systemctl is-active "shadowtls-snell-${port}")
