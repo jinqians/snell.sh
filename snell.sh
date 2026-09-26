@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="5.5"
+current_version="5.7"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -1070,9 +1070,19 @@ After=network.target
 Type=simple
 User=${SNELL_SERVICE_USER}
 Group=${SNELL_SERVICE_GROUP}
+# 服务加固：snell-server 只读配置、不写文件系统（与 netns 版 unit 保持一致）
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ReadOnlyPaths=/etc/snell
 LimitNOFILE=32768
 ExecStart=${snell_binary} -c ${SNELL_CONF_FILE}
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 Restart=on-failure
 RestartSec=2s
 StandardOutput=journal
@@ -1952,8 +1962,88 @@ start_egress_runtime() {
 install_snell() {
     echo -e "${CYAN}正在安装 Snell${RESET}"
 
-    # 选择 Snell 版本
-    select_snell_version
+    # 已存在主配置时先让用户选择，避免误触重装导致端口/PSK 被静默轮换
+    local keep_existing_conf="false"
+    if [ -f "$SNELL_CONF_FILE" ]; then
+        local old_port old_ver
+        old_port=$(get_snell_port)
+        old_ver=$(get_conf_snell_version "$SNELL_CONF_FILE" 2>/dev/null)
+        echo -e "${YELLOW}检测到已存在主用户配置：${SNELL_CONF_FILE}${RESET}"
+        [ -n "$old_port" ] && echo -e "${YELLOW}  当前端口: ${old_port}${RESET}"
+        [ -n "$old_ver" ] && echo -e "${YELLOW}  当前版本通道: ${old_ver}${RESET}"
+        echo -e "${GREEN}1.${RESET} 保留现有端口和 PSK（仅重装二进制/修复服务）"
+        echo -e "${GREEN}2.${RESET} 全新安装（重新生成端口和 PSK）"
+        echo -e "${GREEN}0.${RESET} 取消"
+        local reinstall_choice
+        if ! read -rp "请输入选项 [0-2]: " reinstall_choice; then
+            echo
+            echo -e "${YELLOW}已取消安装。${RESET}"
+            return 0
+        fi
+        case "$reinstall_choice" in
+            1) keep_existing_conf="true" ;;
+            2) keep_existing_conf="false" ;;
+            0)
+                echo -e "${YELLOW}已取消安装。${RESET}"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}无效的选项，已取消安装。${RESET}"
+                return 1
+                ;;
+        esac
+    fi
+
+    if [ "$keep_existing_conf" = "true" ]; then
+        # 沿用已有配置的版本通道重装二进制，不重新询问安装参数
+        SNELL_VERSION_CHOICE=$(get_conf_snell_version "$SNELL_CONF_FILE" 2>/dev/null)
+        case "$SNELL_VERSION_CHOICE" in
+            v4|v5|v6) ;;
+            *)
+                echo -e "${YELLOW}无法识别已有配置的版本通道，请手动选择要重装的版本。${RESET}"
+                select_snell_version
+                ;;
+        esac
+        # 从已有配置读取端口/PSK 等信息，供后续开防火墙、启服务、展示配置使用
+        PORT=$(get_snell_port)
+        PSK=$(grep -E '^[[:space:]]*psk[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+        IPV6_ENABLE=$(grep -E '^[[:space:]]*ipv6[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+        if [ -z "$IPV6_ENABLE" ]; then
+            if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
+                # v6 配置没有 ipv6 键，按 dns-ip-preference 推断（仅用于安装总结展示，不改配置）
+                _keep_dip=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+                if [ "$_keep_dip" = "ipv4-only" ]; then IPV6_ENABLE="false"; else IPV6_ENABLE="true"; fi
+                unset _keep_dip
+            else
+                IPV6_ENABLE="true"
+            fi
+        fi
+        DNS=$(grep -E '^[[:space:]]*dns[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+        [ -z "$DNS" ] && DNS="8.8.8.8"
+        if [ -z "$PORT" ] || [ -z "$PSK" ]; then
+            echo -e "${RED}已有配置缺少端口或 PSK，可能已损坏，请选择全新安装。${RESET}"
+            return 1
+        fi
+        # 磁盘上已有 socket 单元说明之前启用了出口控制，沿用该模式
+        # （netns 初始化脚本不重写：重写需要安装时的接口/子网参数，磁盘上的已是正确的）
+        if [ -f "$SYSTEMD_SOCKET_FILE" ]; then
+            EGRESS_FEATURE_ENABLED="true"
+            # 从磁盘上的 netns 初始化脚本还原接口/命名空间名，供安装总结展示用
+            if [ -f "${NETNS_SETUP_SCRIPT}" ]; then
+                _keep_ns=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "${NETNS_SETUP_SCRIPT}" | head -n 1)
+                [ -n "$_keep_ns" ] && EGRESS_NS="$_keep_ns"
+                _keep_iface=$(grep -o 'oifname "[^"]*"' "${NETNS_SETUP_SCRIPT}" 2>/dev/null | head -n 1 | cut -d'"' -f2)
+                [ -n "$_keep_iface" ] && EGRESS_IFACE="$_keep_iface"
+                unset _keep_ns _keep_iface
+            fi
+        else
+            EGRESS_FEATURE_ENABLED="false"
+        fi
+        echo -e "${GREEN}将保留现有端口和 PSK，仅重装二进制并重写服务单元。${RESET}"
+    else
+        # 选择 Snell 版本
+        select_snell_version
+    fi
 
     wait_for_apt
     apt update && apt install -y wget unzip
@@ -1970,27 +2060,32 @@ install_snell() {
     # 主用户所用通道决定 snell-server 软链指向
     update_snell_symlink "$SNELL_VERSION_CHOICE"
 
-    get_user_port  # 获取用户输入的端口
-    get_dns # 获取用户输入的 DNS 服务器
-    get_ipv6_choice # 是否启用 IPv6
-    # v6 需要额外选择 mode 与 dns-ip-preference
-    if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
-        configure_snell_v6_options
+    if [ "$keep_existing_conf" = "true" ]; then
+        # 保留模式：端口/PSK/DNS 等全部沿用已有配置文件，不重新询问也不覆盖
+        :
+    else
+        get_user_port  # 获取用户输入的端口
+        get_dns # 获取用户输入的 DNS 服务器
+        get_ipv6_choice # 是否启用 IPv6
+        # v6 需要额外选择 mode 与 dns-ip-preference
+        if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
+            configure_snell_v6_options
+        fi
+        get_egress_feature_choice
+        get_egress_settings
+        check_egress_dependencies
+        PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
+
+        # 创建用户配置目录
+        mkdir -p ${SNELL_CONF_DIR}/users
+
+        # 将主用户配置存储在 users 目录下
+        write_snell_conf "${SNELL_CONF_FILE}" "${LISTEN_ADDR}" "${PORT}" "${PSK}" "${IPV6_ENABLE}" "${DNS}" "${SNELL_VERSION_CHOICE}"
     fi
-    get_egress_feature_choice
-    get_egress_settings
-    check_egress_dependencies
-    PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
-
-    # 创建用户配置目录
-    mkdir -p ${SNELL_CONF_DIR}/users
-
-    # 将主用户配置存储在 users 目录下
-    write_snell_conf "${SNELL_CONF_FILE}" "${LISTEN_ADDR}" "${PORT}" "${PSK}" "${IPV6_ENABLE}" "${DNS}" "${SNELL_VERSION_CHOICE}"
 
     write_main_systemd_service
 
-    if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
+    if [ "$EGRESS_FEATURE_ENABLED" = "true" ] && [ "$keep_existing_conf" != "true" ]; then
         write_snell_netns_service
         write_snell_socket_service_units "$PORT" "$LISTEN_ADDR"
     fi
@@ -2296,6 +2391,37 @@ uninstall_snell() {
         done
     fi
 
+    # 清理出口控制残留：netns / veth / nft 表 / FORWARD 规则 / /etc/netns（不存在时静默跳过）
+    # 命名空间名以 netns 初始化脚本中的实际值为准（用户可能自定义过），取不到则用默认值
+    local egress_ns="${EGRESS_NS:-snell-egress}"
+    if [ -f "${NETNS_SETUP_SCRIPT}" ]; then
+        local script_ns
+        script_ns=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "${NETNS_SETUP_SCRIPT}" | head -n 1)
+        [ -n "$script_ns" ] && egress_ns="$script_ns"
+    fi
+    if command -v ip >/dev/null 2>&1; then
+        [ -n "$egress_ns" ] && ip netns del "$egress_ns" 2>/dev/null || true
+        # 删除 veth 对（删除一端，另一端自动消失）
+        ip link del veth-host 2>/dev/null || true
+    fi
+    if [ -n "$egress_ns" ]; then
+        rm -rf "/etc/netns/${egress_ns}" 2>/dev/null
+    fi
+    if command -v nft >/dev/null 2>&1; then
+        # 精确删除本脚本建过的两张表（netns 初始化脚本建表处可查）
+        nft delete table ip snell_nat 2>/dev/null || true
+        nft delete table inet snell_filter 2>/dev/null || true
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        # netns 脚本只加过含 veth-host 的 FORWARD 规则，按系统实际规则逐条精确删除
+        local fwd_del
+        while fwd_del=$(iptables -S FORWARD 2>/dev/null | grep -- '-A FORWARD.*veth-host' | head -n 1 | sed 's/^-A /-D /'); do
+            [ -z "$fwd_del" ] && break
+            # shellcheck disable=SC2086
+            iptables $fwd_del 2>/dev/null || break
+        done
+    fi
+
     # 删除服务文件
     rm -f /lib/systemd/system/snell.service
     rm -f ${SYSTEMD_SERVICE_FILE}
@@ -2316,7 +2442,24 @@ uninstall_snell() {
     if ! find "${SYSTEMD_DIR}" -maxdepth 1 -name "shadowtls-*.service" 2>/dev/null | grep -q .; then
         rm -f /usr/local/bin/shadow-tls
     fi
-    
+
+    # snell 系统用户/组默认保留，询问后才删除
+    echo -e "${YELLOW}是否同时删除 snell 系统用户和用户组？[y/N]${RESET}"
+    local del_snell_user
+    if ! read -r del_snell_user; then
+        del_snell_user=""
+    fi
+    if [[ "$del_snell_user" =~ ^[Yy]$ ]]; then
+        if getent passwd snell >/dev/null 2>&1; then
+            userdel snell 2>/dev/null && echo -e "${GREEN}已删除系统用户 snell${RESET}"
+        fi
+        if getent group snell >/dev/null 2>&1; then
+            groupdel snell 2>/dev/null && echo -e "${GREEN}已删除用户组 snell${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}已保留 snell 系统用户和用户组。${RESET}"
+    fi
+
     # 重载 systemd 配置
     systemctl daemon-reload
     
@@ -3236,6 +3379,12 @@ setup_multi_user() {
     sleep 1  # 给用户一点时间看到提示
 }
 
+# 两栏菜单的一行：_menu_row "1." "安装 Snell" 9 "7." "多用户管理"
+# $3 为左栏补空格数（标签固定，空格数已按中文 2 列宽度算好，左栏总宽 24）
+_menu_row() {
+    echo -e "${GREEN}  $1${RESET} $2$(printf '%*s' "$3" "")${GREEN}$4${RESET} $5"
+}
+
 # 主菜单
 show_menu() {
     clear
@@ -3245,29 +3394,18 @@ show_menu() {
     echo -e "${GREEN}作者: jinqian${RESET}"
     echo -e "${GREEN}网站：https://jinqians.com${RESET}"
     echo -e "${CYAN}============================================${RESET}"
-    
+
     # 显示服务状态
     check_and_show_status
-    
-    echo -e "${YELLOW}=== 基础功能 ===${RESET}"
-    echo -e "${GREEN}1.${RESET} 安装 Snell"
-    echo -e "${GREEN}2.${RESET} 卸载 Snell"
-    echo -e "${GREEN}3.${RESET} 查看配置"
-    echo -e "${GREEN}4.${RESET} 重启服务"
-    
-    echo -e "\n${YELLOW}=== 增强功能 ===${RESET}"
-    echo -e "${GREEN}5.${RESET} ShadowTLS 管理"
-    echo -e "${GREEN}6.${RESET} BBR 管理"
-    echo -e "${GREEN}7.${RESET} 多用户管理"
-    
-    echo -e "\n${YELLOW}=== 系统功能 ===${RESET}"
-    echo -e "${GREEN}8.${RESET} 版本管理（更新 / 追加通道 / 切换通道）"
-    echo -e "${GREEN}9.${RESET} 更新脚本"
-    echo -e "${GREEN}10.${RESET} 查看服务状态"
-    echo -e "${GREEN}11.${RESET} Snell v5/v6 出口控制设置"
-    echo -e "${GREEN}0.${RESET} 退出脚本"
-    
-    echo -e "${CYAN}============================================${RESET}"
+
+    echo -e "${CYAN}--------------------------------------------${RESET}"
+    _menu_row "1." "安装 Snell" 9 "7." "多用户管理"
+    _menu_row "2." "卸载 Snell" 9 "8." "版本管理（更新 / 追加通道 / 切换通道）"
+    _menu_row "3." "查看配置" 11 "9." "更新脚本"
+    _menu_row "4." "重启服务" 11 "10." "查看服务状态"
+    _menu_row "5." "ShadowTLS 管理" 5 "11." "Snell v5/v6 出口控制设置"
+    _menu_row "6." "BBR 管理" 11 "0." "退出脚本"
+    echo -e "${CYAN}--------------------------------------------${RESET}"
     if ! read -rp "请输入选项 [0-11]: " num; then
         echo
         echo -e "${YELLOW}未读取到输入，已退出 Snell 菜单。${RESET}"

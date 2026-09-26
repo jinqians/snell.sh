@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 # 当前版本号
-current_version="4.3"
+current_version="4.4"
 
 # systemd 服务目录
 SYSTEMD_DIR="/etc/systemd/system"
@@ -27,9 +27,27 @@ MAINLAND_SCRIPT_DIR="/usr/local/share/ss-2022"
 # 安装全局命令
 install_global_command() {
     echo -e "${CYAN}正在安装全局命令...${RESET}"
-    
-    # 下载脚本到 /usr/local/bin
-    curl -L -s menu.jinqians.com -o "/usr/local/bin/menu.sh"
+
+    # 先下载到临时文件，校验通过后再覆盖目标文件，避免下载失败破坏现有 menu 命令
+    local tmp_file
+    tmp_file=$(mktemp /tmp/menu_download.XXXXXX) || { echo -e "${RED}无法创建临时文件${RESET}"; return 1; }
+    if ! curl -fsSL "https://menu.jinqians.com" -o "$tmp_file"; then
+        echo -e "${RED}下载 menu 脚本失败，请检查网络连接${RESET}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if [ ! -s "$tmp_file" ]; then
+        echo -e "${RED}下载的 menu 脚本为空，已丢弃${RESET}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+    if ! bash -n "$tmp_file" 2>/dev/null; then
+        echo -e "${RED}下载的 menu 脚本未通过语法检查，已丢弃${RESET}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+
+    mv -f "$tmp_file" "/usr/local/bin/menu.sh"
     chmod +x "/usr/local/bin/menu.sh"
     
     # 创建软链接

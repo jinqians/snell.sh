@@ -138,7 +138,9 @@ install_dependencies() {
     done
     
     echo -e "${CYAN}强制安装 glibc 包（可能有警告）...${RESET}"
-    apk add --allow-untrusted --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk /tmp/glibc-i18n.apk
+    # 注意：不要加 --allow-untrusted。上面已把 sgerrand.rsa.pub 导入 /etc/apk/keys/，
+    # 去掉该选项后 apk 会用该公钥对三个 apk 做正常的签名校验；若某包签名无效安装会直接失败。
+    apk add --force-overwrite /tmp/glibc.apk /tmp/glibc-bin.apk /tmp/glibc-i18n.apk
     
     echo -e "${CYAN}配置语言环境...${RESET}"
     /usr/glibc-compat/bin/localedef -i en_US -f UTF-8 en_US.UTF-8 >/dev/null 2>&1
@@ -468,6 +470,43 @@ open_port() {
     echo -e "${GREEN}防火墙端口 ${port} 已开放并设为开机自启${RESET}"
 }
 
+# 删除 nftables 中某端口的 tcp/udp 放行规则（open_port/open_nftables_port 的逆操作）
+# 注：本文件为 #!/bin/sh（busybox ash），此处刻意不用 local 以避免新增 shellcheck SC3043，
+# 内部变量统一用 _cnp_ 前缀防止与调用者冲突。
+close_nftables_port() {
+    _cnp_port=$1
+    [ -n "$_cnp_port" ] || return 0
+    command -v nft >/dev/null 2>&1 || return 0
+
+    _cnp_chain_list=$(mktemp)
+    # 安装回退时创建的表优先处理
+    echo "inet snell_filter input" > "$_cnp_chain_list"
+    nft -a list ruleset 2>/dev/null | awk '
+        $1 == "table" { family=$2; table=$3; gsub(/[{}]/, "", table) }
+        $1 == "chain" { chain=$2; gsub(/[{}]/, "", chain); in_chain=1; next }
+        in_chain && /type filter/ && /hook input/ { print family " " table " " chain }
+        in_chain && /^[[:space:]]*}/ { in_chain=0 }
+    ' >> "$_cnp_chain_list"
+
+    while read -r _cnp_family _cnp_table _cnp_chain; do
+        [ -z "$_cnp_family" ] && continue
+        nft list chain "$_cnp_family" "$_cnp_table" "$_cnp_chain" >/dev/null 2>&1 || continue
+        for _cnp_proto in tcp udp; do
+            # 按 handle 逐条删除匹配 "tcp/udp dport <port>" 的规则（端口做尾部锚定，避免 8080 误伤 80801）
+            _cnp_handles=$(nft --handle list chain "$_cnp_family" "$_cnp_table" "$_cnp_chain" 2>/dev/null | \
+                awk -v pr="$_cnp_proto" -v p="$_cnp_port" '
+                    $0 ~ pr " dport " p "( |$)" {
+                        for (i = 1; i <= NF; i++) if ($i == "handle") print $(i+1)
+                    }')
+            for _cnp_h in $_cnp_handles; do
+                nft delete rule "$_cnp_family" "$_cnp_table" "$_cnp_chain" handle "$_cnp_h" 2>/dev/null || true
+            done
+        done
+    done < "$_cnp_chain_list"
+    rm -f "$_cnp_chain_list"
+    unset _cnp_port _cnp_chain_list _cnp_family _cnp_table _cnp_chain _cnp_proto _cnp_handles _cnp_h
+}
+
 # 创建snell脚本
 create_management_script() {
     echo -e "${CYAN}正在创建 'snell' 管理命令...${RESET}"
@@ -504,7 +543,7 @@ show_manual_debug_info() {
     echo "1. 检查文件类型: file ${INSTALL_DIR}/snell-server"
     echo "2. 检查依赖关系: ldd ${INSTALL_DIR}/snell-server"
     echo "3. 直接运行测试: ${INSTALL_DIR}/snell-server --help"
-    echo "4. 使用 glibc 链接器: /usr/glibc-compat/lib/ld-linux-x86-64.so.2 ${INSTALL_DIR}/snell-server --help"
+    echo "4. 使用 glibc 链接器: ${glibc_loader} ${INSTALL_DIR}/snell-server --help"
     echo -e "${YELLOW}===================================${RESET}"
 }
 
@@ -536,13 +575,13 @@ install_snell() {
     if timeout 5s ${INSTALL_DIR}/snell-server --help >/dev/null 2>&1; then
         echo -e "${GREEN}✓ 兼容性测试通过：程序可直接运行。${RESET}"
         SNELL_COMMAND="${INSTALL_DIR}/snell-server"
-    elif timeout 5s /usr/glibc-compat/lib/ld-linux-x86-64.so.2 ${INSTALL_DIR}/snell-server --help >/dev/null 2>&1; then
+    elif timeout 5s "${glibc_loader}" ${INSTALL_DIR}/snell-server --help >/dev/null 2>&1; then
         echo -e "${GREEN}✓ 兼容性测试通过：使用 glibc 动态加载器运行。${RESET}"
         cat > ${INSTALL_DIR}/snell-server-wrapper << EOF
 #!/bin/sh
 export LD_LIBRARY_PATH="/usr/glibc-compat/lib:\${LD_LIBRARY_PATH}"
 export GLIBC_TUNABLES="glibc.pthread.rseq=0"
-exec /usr/glibc-compat/lib/ld-linux-x86-64.so.2 ${INSTALL_DIR}/snell-server "\$@"
+exec "${glibc_loader}" ${INSTALL_DIR}/snell-server "\$@"
 EOF
         chmod +x ${INSTALL_DIR}/snell-server-wrapper
         SNELL_COMMAND="${INSTALL_DIR}/snell-server-wrapper"
@@ -575,8 +614,10 @@ EOF
             echo "ipv6 = true"
             echo "tfo = true"
         fi
-        echo "version-choice = ${SNELL_VERSION_CHOICE}"
+        # 版本标记写成注释，避免被 snell-server 当成真实配置键解析（与主脚本 snell.sh 一致）
+        echo "#version-choice = ${SNELL_VERSION_CHOICE}"
     } > ${SNELL_CONF_FILE}
+    chmod 600 ${SNELL_CONF_FILE}
 
     # 修正：使用您脚本中更健壮的 OpenRC 服务文件
     cat > ${OPENRC_SERVICE_FILE} << EOF
@@ -651,7 +692,23 @@ uninstall_snell() {
     rc-update del snell default 2>/dev/null
     if [ -f "${SNELL_CONF_FILE}" ]; then
         PORT_TO_CLOSE=$(grep 'listen' ${SNELL_CONF_FILE} | sed 's/.*://' | tr -d ' ')
-        if [ -n "$PORT_TO_CLOSE" ]; then iptables -D INPUT -p tcp --dport "$PORT_TO_CLOSE" -j ACCEPT 2>/dev/null; fi
+        if [ -n "$PORT_TO_CLOSE" ]; then
+            # iptables: tcp 与 udp 规则都要删（安装时 open_port 开了两套）
+            if command -v iptables >/dev/null 2>&1; then
+                iptables -D INPUT -p tcp --dport "$PORT_TO_CLOSE" -j ACCEPT 2>/dev/null || true
+                iptables -D INPUT -p udp --dport "$PORT_TO_CLOSE" -j ACCEPT 2>/dev/null || true
+            fi
+            # nftables: 删除对应端口的 tcp/udp 放行规则
+            close_nftables_port "$PORT_TO_CLOSE"
+        fi
+    fi
+    # 清理安装时追加到 /etc/profile 的环境变量（只删除脚本自己加的那两行，不动用户其他内容）
+    if [ -f /etc/profile ]; then
+        tmp_profile=$(mktemp)
+        grep -vF 'export LD_LIBRARY_PATH="/usr/glibc-compat/lib:${LD_LIBRARY_PATH}"' /etc/profile | \
+            grep -vF 'export GLIBC_TUNABLES=glibc.pthread.rseq=0' > "$tmp_profile" && \
+            cat "$tmp_profile" > /etc/profile
+        rm -f "$tmp_profile"
     fi
     rm -f ${OPENRC_SERVICE_FILE} ${INSTALL_DIR}/snell-server ${INSTALL_DIR}/snell-server-wrapper
     rm -rf ${SNELL_CONF_DIR} /var/log/snell
@@ -663,7 +720,8 @@ show_information() {
     
     PORT=$(grep 'listen' ${SNELL_CONF_FILE} | sed 's/.*://')
     PSK=$(grep 'psk' ${SNELL_CONF_FILE} | sed 's/^[^=]*=[[:space:]]*//')
-    INSTALLED_VERSION_CHOICE=$(grep 'version-choice' ${SNELL_CONF_FILE} | sed 's/version-choice\s*=\s*//')
+    # 版本标记为注释形式（#version-choice = ...），解析时兼容 # 前缀
+    INSTALLED_VERSION_CHOICE=$(grep -E '^[[:space:]]*#[[:space:]]*version-choice[[:space:]]*=' ${SNELL_CONF_FILE} | head -n 1 | awk -F'=' '{print $2}' | tr -d '[:space:]')
     [ -z "$INSTALLED_VERSION_CHOICE" ] && INSTALLED_VERSION_CHOICE="v4"
     INSTALLED_MODE=$(grep -E '^[[:space:]]*mode[[:space:]]*=' ${SNELL_CONF_FILE} | head -n 1 | sed 's/^[^=]*=[[:space:]]*//')
     [ -z "$INSTALLED_MODE" ] && INSTALLED_MODE="${SNELL_MODE}"
