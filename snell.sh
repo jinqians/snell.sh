@@ -318,6 +318,12 @@ write_snell_conf() {
         fi
         echo "dns = ${dns}"
     } > "$conf_file"
+
+    # PSK 是共享密钥：仅属主可读写，避免本机其他用户读取
+    chmod 600 "$conf_file" 2>/dev/null || true
+    if getent passwd "${SNELL_SERVICE_USER}" >/dev/null 2>&1; then
+        chown "${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP}" "$conf_file" 2>/dev/null || true
+    fi
 }
 
 # 版本切换后同步配置文件参数：v6 用 mode / dns-ip-preference，v4/v5 用 ipv6
@@ -390,7 +396,7 @@ get_ip_country() {
         return 1
     fi
 
-    for api in "http://ipinfo.io/${target}/country" \
+    for api in "https://ipinfo.io/${target}/country" \
                "http://ip-api.com/line/${target}?fields=countryCode" \
                "https://ipwho.is/${target}?fields=country_code" \
                "https://ipapi.co/${target}/country/"; do
@@ -453,11 +459,12 @@ detect_installed_snell_version() {
 }
 
 # === 新增：备份和还原配置函数 ===
-# 备份 Snell 配置
+# 备份 Snell 配置（只保留最近 10 个备份，避免越积越多）
 backup_snell_config() {
     local backup_dir="${SNELL_CONF_DIR}/backup_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp -a "${SNELL_CONF_DIR}/users"/*.conf "$backup_dir"/ 2>/dev/null
+    ls -dt "${SNELL_CONF_DIR}"/backup_* 2>/dev/null | tail -n +11 | xargs -r rm -rf
     echo "$backup_dir"
 }
 
@@ -503,6 +510,31 @@ check_curl() {
             exit 1
         fi
     fi
+}
+
+# 下载远程脚本并做完整性校验：传输失败即停、非空、bash 语法检查。
+# 注意：这只能保证传输完整性；仓库本身被篡改需要靠发布签名来防，
+# 建议后续为 release 附加 SHA256 / GPG 签名。
+fetch_verified_script() {
+    local url="$1"
+    local dest="$2"
+
+    if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 "$url" -o "$dest"; then
+        echo -e "${RED}下载失败: ${url}${RESET}" >&2
+        rm -f "$dest"
+        return 1
+    fi
+    if [ ! -s "$dest" ]; then
+        echo -e "${RED}下载的文件为空，已丢弃: ${url}${RESET}" >&2
+        rm -f "$dest"
+        return 1
+    fi
+    if ! bash -n "$dest" 2>/dev/null; then
+        echo -e "${RED}下载的脚本未通过语法检查，已丢弃: ${url}${RESET}" >&2
+        rm -f "$dest"
+        return 1
+    fi
+    return 0
 }
 
 # 定义系统路径
@@ -714,12 +746,20 @@ update_snell_symlink() {
     ln -sfn "$target" "${INSTALL_DIR}/snell-server"
 }
 
-# 生成指定通道 + 版本号的下载地址；不支持的架构返回非 0（不 exit，调用方可继续）
+# 生成指定通道 + 版本号的下载地址；不支持的通道或架构返回非 0（不 exit，调用方可继续）
 snell_download_url_for() {
     local version_choice="$1"
     local resolved_version="$2"
     local arch
     arch=$(uname -m)
+
+    case "$version_choice" in
+        v4|v5|v6) ;;
+        *)
+            echo -e "${RED}不支持的 Snell 通道: ${version_choice}${RESET}" >&2
+            return 1
+            ;;
+    esac
 
     if [ "$version_choice" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
         echo -e "${RED}Snell v6 暂不提供 armv7l 构建${RESET}" >&2
@@ -780,15 +820,22 @@ install_snell_binary_for_version() {
 
     local downloaded=false
     if command -v wget >/dev/null 2>&1; then
-        wget -O "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
+        wget --tries=3 --timeout=15 -O "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
     elif command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 2 -o "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
+        curl -fL --retry 3 --connect-timeout 10 --max-time 120 -o "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
     else
         echo -e "${RED}系统缺少 wget 与 curl，无法下载${RESET}" >&2
     fi
 
     if [ "$downloaded" != "true" ]; then
         echo -e "${RED}下载 Snell ${version} 失败: ${url}${RESET}" >&2
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # 校验压缩包完整性（官方未发布 hash，只能做传输完整性检查）
+    if ! unzip -t -q "${tmp_dir}/snell-server.zip" >/dev/null 2>&1; then
+        echo -e "${RED}下载的压缩包已损坏，已丢弃: ${url}${RESET}" >&2
         rm -rf "$tmp_dir"
         return 1
     fi
@@ -964,6 +1011,8 @@ ensure_snell_config_dir() {
         chown -R "${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP}" "${SNELL_CONF_DIR}" 2>/dev/null || true
     fi
     chmod 755 "${SNELL_CONF_DIR}" "${SNELL_CONF_DIR}/users" 2>/dev/null || true
+    # 存有 PSK 的配置文件仅属主可读写
+    find "${SNELL_CONF_DIR}/users" -maxdepth 1 -name "*.conf" -exec chmod 600 {} + 2>/dev/null || true
 }
 
 migrate_legacy_main_config_if_needed() {
@@ -1121,7 +1170,6 @@ auto_detect_egress_iface
 
 # 检查并迁移旧配置
 check_and_migrate_config() {
-    local need_migration=false
     local old_files_exist=false
 
     # 自动修复 4.x -> 5.x 后服务指向新路径、配置仍在旧路径导致的启动失败。
@@ -1143,12 +1191,12 @@ check_and_migrate_config() {
         
         # 检查用户目录是否存在
         if [ ! -d "${SNELL_CONF_DIR}/users" ]; then
-            need_migration=true
             mkdir -p "${SNELL_CONF_DIR}/users"
-            # 设置正确的目录权限
+            # 设置正确的目录权限（配置文件含 PSK，仅属主可读写）
             ensure_snell_service_user
             chown -R "${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP}" "${SNELL_CONF_DIR}"
-            chmod -R 755 "${SNELL_CONF_DIR}"
+            find "${SNELL_CONF_DIR}" -type d -exec chmod 755 {} +
+            find "${SNELL_CONF_DIR}" -name "*.conf" -exec chmod 600 {} +
         fi
     fi
 
@@ -1206,45 +1254,6 @@ check_and_migrate_config() {
     fi
 }
 
-# 自动更新脚本
-auto_update_script() {
-    echo -e "${CYAN}正在检查脚本更新...${RESET}"
-    
-    # 创建临时文件
-    TMP_SCRIPT=$(mktemp)
-    
-    # 下载最新版本
-    if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
-        # 获取新版本号
-        new_version=$(grep -m1 -E '^current_version="' "$TMP_SCRIPT" | cut -d'"' -f2)
-        
-        # 比较版本号
-        if [ "$new_version" != "$current_version" ]; then
-            echo -e "${GREEN}发现新版本：${new_version}${RESET}"
-            echo -e "${YELLOW}当前版本：${current_version}${RESET}"
-            
-            # 备份当前脚本
-            cp "$0" "${0}.backup"
-            
-            # 更新脚本
-            mv "$TMP_SCRIPT" "$0"
-            chmod +x "$0"
-            
-            echo -e "${GREEN}脚本已更新到最新版本${RESET}"
-            echo -e "${YELLOW}已备份原脚本到：${0}.backup${RESET}"
-            
-            # 提示用户重新运行脚本
-            echo -e "${CYAN}请重新运行脚本以使用新版本${RESET}"
-            exit 0
-        else
-            echo -e "${GREEN}当前已是最新版本 (${current_version})${RESET}"
-            rm -f "$TMP_SCRIPT"
-        fi
-    else
-        echo -e "${RED}检查更新失败，请检查网络连接${RESET}"
-        rm -f "$TMP_SCRIPT"
-    fi
-}
 
 # 等待其他 apt 进程完成
 wait_for_apt() {
@@ -1304,6 +1313,18 @@ get_user_port() {
     while true; do
         read -rp "请输入要使用的端口号 (1-65535): " PORT
         if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+            if is_port_in_use "$PORT"; then
+                echo -e "${YELLOW}警告：端口 ${PORT} 当前已被占用${RESET}"
+                show_port_occupier "$PORT"
+                read -rp "仍要使用该端口吗? [y/N]: " port_confirm
+                case "$port_confirm" in
+                    [yY]|[yY][eE][sS]) ;;
+                    *)
+                        echo -e "${CYAN}请重新选择端口${RESET}"
+                        continue
+                        ;;
+                esac
+            fi
             echo -e "${GREEN}已选择端口: $PORT${RESET}"
             break
         else
@@ -1402,6 +1423,17 @@ get_egress_settings() {
     read -rp "请输入 netns 名称（默认 snell-egress）: " custom_ns
     if [ -n "$custom_ns" ]; then
         EGRESS_NS="$custom_ns"
+    fi
+
+    # 白名单校验：这两个值会被写入 root 执行的初始化脚本，
+    # 非法字符可能导致脚本损坏或命令注入
+    if ! [[ "$EGRESS_IFACE" =~ ^[a-zA-Z0-9_.-]{1,15}$ ]]; then
+        echo -e "${RED}接口名称不合法（只允许字母、数字、_ . -，最长 15 字符），已恢复为自动检测值${RESET}"
+        auto_detect_egress_iface
+    fi
+    if ! [[ "$EGRESS_NS" =~ ^[a-zA-Z0-9_.-]{1,16}$ ]]; then
+        echo -e "${YELLOW}命名空间名称不合法（只允许字母、数字、_ . -），已恢复默认值 snell-egress${RESET}"
+        EGRESS_NS="snell-egress"
     fi
 
     # 自动探测默认子网，并允许用户手工覆盖
@@ -1516,18 +1548,34 @@ EOF
 }
 
 # 写入 socket activation 单元
+# listen_addr 可选：不传时从主配置的 listen 行推导，保证 socket 监听地址族与配置一致
+# （之前写死 0.0.0.0，IPv6 用户开 egress 后 IPv6 监听会静默丢失）
 write_snell_socket_service_units() {
     local listen_port=$1
+    local listen_addr="${2:-}"
     local snell_binary
     snell_binary=$(main_snell_binary)
+
+    if [ -z "$listen_addr" ] && [ -f "$SNELL_CONF_FILE" ]; then
+        listen_addr=$(grep -E '^[[:space:]]*listen[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 \
+            | sed -n 's/^[[:space:]]*listen[[:space:]]*=[[:space:]]*\(.*\):[0-9][0-9]*[[:space:]]*$/\1/p')
+    fi
+    [ -z "$listen_addr" ] && listen_addr="0.0.0.0"
+
+    local socket_stream="ListenStream=0.0.0.0:${listen_port}"
+    local socket_datagram="ListenDatagram=0.0.0.0:${listen_port}"
+    if [[ "$listen_addr" == *:* ]]; then
+        socket_stream="ListenStream=[::]:${listen_port}"
+        socket_datagram="ListenDatagram=[::]:${listen_port}"
+    fi
 
     cat > ${SYSTEMD_SOCKET_FILE} << EOF
 [Unit]
 Description=Snell v5 (socket-activated)
 
 [Socket]
-ListenStream=0.0.0.0:${listen_port}
-ListenDatagram=0.0.0.0:${listen_port}
+${socket_stream}
+${socket_datagram}
 FileDescriptorName=snell_inet
 ReusePort=no
 NoDelay=true
@@ -1605,9 +1653,12 @@ show_port_occupier() {
 }
 
 # 按端口强制清理监听进程（优先清理 snell 相关，最后兜底清理全部监听者）
+# 按端口释放监听进程：只自动处理 snell 相关进程；
+# 非 snell 进程必须经用户明确确认才会结束，避免误杀 nginx/sshd 等服务
 force_release_port_by_pid() {
     local port="$1"
     local pids pid cmd
+    local snell_pids="" other_pids=""
 
     if command -v ss &> /dev/null; then
         pids=$( {
@@ -1626,17 +1677,43 @@ force_release_port_by_pid() {
     for pid in $pids; do
         cmd=$(ps -p "$pid" -o args= 2>/dev/null)
         if echo "$cmd" | grep -q "snell"; then
-            kill -TERM "$pid" 2>/dev/null || true
+            snell_pids="${snell_pids}${pid} "
+        else
+            other_pids="${other_pids}${pid} "
         fi
+    done
+
+    for pid in $snell_pids; do
+        kill -TERM "$pid" 2>/dev/null || true
     done
 
     sleep 0.2
 
     if is_port_in_use "$port"; then
-        for pid in $pids; do
-            kill -KILL "$pid" 2>/dev/null || true
-        done
+        if [ -n "$other_pids" ]; then
+            echo -e "${RED}端口 ${port} 仍被以下非 Snell 进程占用:${RESET}"
+            for pid in $other_pids; do
+                echo -e "  PID ${pid}: $(ps -p "$pid" -o args= 2>/dev/null)"
+            done
+            echo -e "${YELLOW}是否强制结束这些进程以释放端口? [y/N]${RESET}"
+            read -r kill_choice
+            case "$kill_choice" in
+                [yY]|[yY][eE][sS]) ;;
+                *)
+                    echo -e "${YELLOW}已取消，未释放端口 ${port}${RESET}"
+                    return 1
+                    ;;
+            esac
+            for pid in $other_pids; do
+                kill -KILL "$pid" 2>/dev/null || true
+            done
+        else
+            for pid in $snell_pids; do
+                kill -KILL "$pid" 2>/dev/null || true
+            done
+        fi
     fi
+    return 0
 }
 
 # 切换到 socket activation 前，确保主端口已释放
@@ -1652,7 +1729,8 @@ ensure_main_port_free_for_socket() {
     # 兜底：避免残留 snell-server 进程继续占用端口
     systemctl kill snell --signal=SIGKILL 2>/dev/null
     pkill -f "${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}" 2>/dev/null || true
-    force_release_port_by_pid "$port"
+    # 用户拒绝释放非 snell 进程时直接中止，不再盲等 20 次
+    force_release_port_by_pid "$port" || return 1
 
     for i in {1..20}; do
         if ! is_port_in_use "$port"; then
@@ -1764,8 +1842,9 @@ open_port() {
     # 检查 iptables 是否已安装
     if command -v iptables &> /dev/null; then
         echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
-        iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-        iptables -I INPUT -p udp --dport "$PORT" -j ACCEPT
+        # 已存在则跳过，避免重复安装时堆积重复规则
+        iptables -C INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
+        iptables -C INPUT -p udp --dport "$PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$PORT" -j ACCEPT
         
         # 创建 iptables 规则保存目录（如果不存在）
         if [ ! -d "/etc/iptables" ]; then
@@ -1913,7 +1992,7 @@ install_snell() {
 
     if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
         write_snell_netns_service
-        write_snell_socket_service_units "$PORT"
+        write_snell_socket_service_units "$PORT" "$LISTEN_ADDR"
     fi
 
     systemctl daemon-reload
@@ -1980,7 +2059,7 @@ install_snell() {
     fi
     echo -e "${YELLOW}监听端口: ${PORT}${RESET}"
     echo -e "${YELLOW}PSK 密钥: ${PSK}${RESET}"
-    echo -e "${YELLOW}IPv6: true${RESET}"
+    echo -e "${YELLOW}IPv6: ${IPV6_ENABLE}${RESET}"
     echo -e "${YELLOW}DNS 服务器: ${DNS}${RESET}"
     echo -e "${CYAN}--------------------------------${RESET}"
 
@@ -2036,14 +2115,15 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-# 下载并执行最新版本的脚本
+# 下载并执行最新版本的脚本（带完整性校验：传输失败即停、非空、语法检查）
 echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
 TMP_SCRIPT=$(mktemp)
-if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
+if curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT" \
+    && [ -s "$TMP_SCRIPT" ] && bash -n "$TMP_SCRIPT" 2>/dev/null; then
     bash "$TMP_SCRIPT"
     rm -f "$TMP_SCRIPT"
 else
-    echo -e "${RED}下载脚本失败，请检查网络连接。${RESET}"
+    echo -e "${RED}下载或校验脚本失败，请检查网络连接。${RESET}"
     rm -f "$TMP_SCRIPT"
     exit 1
 fi
@@ -2131,7 +2211,7 @@ configure_v5_egress_control() {
             fi
 
             echo -e "${GREEN}已应用出口控制（接口 ${EGRESS_IFACE}，命名空间 ${EGRESS_NS}）。${RESET}"
-            if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
+            if [ "$installed_version" = "v6" ]; then
             echo -e "${YELLOW}v6 已移除 QUIC 代理模式，客户端 version = 6 且 mode 需与服务端一致。${RESET}"
         else
             echo -e "${YELLOW}建议客户端优先使用 version = 4（v5 的 QUIC/UDP 依赖更高）。${RESET}"
@@ -3017,38 +3097,22 @@ check_snell_update() {
     esac
 }
 
-# 获取最新 GitHub 版本
-get_latest_github_version() {
-    local api_url="https://api.github.com/repos/jinqians/snell.sh/releases/latest"
-    local response
-    
-    response=$(curl -s "$api_url")
-    if [ $? -ne 0 ] || [ -z "$response" ]; then
-        echo -e "${RED}无法获取 GitHub 上的最新版本信息。${RESET}"
-        return 1
-    fi
-
-    GITHUB_VERSION=$(echo "$response" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-    if [ -z "$GITHUB_VERSION" ]; then
-        echo -e "${RED}解析 GitHub 版本信息失败。${RESET}"
-        return 1
-    fi
-}
-
 # 更新脚本
 update_script() {
     echo -e "${CYAN}正在检查脚本更新...${RESET}"
     
     # 创建临时文件
+    local TMP_SCRIPT
     TMP_SCRIPT=$(mktemp)
-    
-    # 下载最新版本
-    if curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT"; then
+
+    # 下载最新版本（带完整性校验）
+    if fetch_verified_script https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh "$TMP_SCRIPT"; then
         # 获取新版本号
         new_version=$(grep -m1 -E '^current_version="' "$TMP_SCRIPT" | cut -d'"' -f2)
-        
-        if [ -z "$new_version" ]; then
-            echo -e "${RED}无法获取新版本信息${RESET}"
+
+        # 版本号格式必须合法，防止下载到错误内容后误更新
+        if ! [[ "$new_version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo -e "${RED}下载的脚本版本号格式异常，已中止更新${RESET}"
             rm -f "$TMP_SCRIPT"
             return 1
         fi
@@ -3138,14 +3202,6 @@ get_shadowtls_config() {
     return 0
 }
 
-# 检查是否以 root 权限运行
-check_root() {
-    if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}请以 root 权限运行此脚本${RESET}"
-        exit 1
-    fi
-}
-
 # 初始检查
 initial_check() {
     check_root
@@ -3166,8 +3222,15 @@ initial_check
 # 多用户管理
 setup_multi_user() {
     echo -e "${CYAN}正在执行多用户管理脚本...${RESET}"
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/multi-user.sh)
-    
+    local tmp_script
+    tmp_script=$(mktemp)
+    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/multi-user.sh" "$tmp_script"; then
+        bash "$tmp_script"
+    else
+        echo -e "${RED}多用户管理脚本下载校验失败，已取消执行。${RESET}"
+    fi
+    rm -f "$tmp_script"
+
     # 多用户管理脚本执行完毕后会自动返回这里
     echo -e "${GREEN}多用户管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
@@ -3215,10 +3278,17 @@ show_menu() {
 #开启bbr
 setup_bbr() {
     echo -e "${CYAN}正在获取并执行 BBR 管理脚本...${RESET}"
-    
-    # 直接从远程执行BBR脚本
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/bbr.sh)
-    
+
+    # 下载到本地校验通过后再执行
+    local tmp_script
+    tmp_script=$(mktemp)
+    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/bbr.sh" "$tmp_script"; then
+        bash "$tmp_script"
+    else
+        echo -e "${RED}BBR 脚本下载校验失败，已取消执行。${RESET}"
+    fi
+    rm -f "$tmp_script"
+
     # BBR 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}BBR 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
@@ -3227,8 +3297,15 @@ setup_bbr() {
 # ShadowTLS管理
 setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh)
-    
+    local tmp_script
+    tmp_script=$(mktemp)
+    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh" "$tmp_script"; then
+        bash "$tmp_script"
+    else
+        echo -e "${RED}ShadowTLS 脚本下载校验失败，已取消执行。${RESET}"
+    fi
+    rm -f "$tmp_script"
+
     # ShadowTLS 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
