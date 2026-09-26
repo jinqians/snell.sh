@@ -118,7 +118,7 @@ docker run -d --name snell-shadowtls --restart unless-stopped \
   -v ./snell-config:/etc/snell \
   jinqians/snell-server:v5
 
-docker logs snell-shadowtls     # PSK 和 ShadowTLS 密码都在里面
+docker logs snell-shadowtls     # 首次启动的日志里有 PSK 和 ShadowTLS 密码
 ```
 
 *方式 C（docker compose）*：
@@ -604,7 +604,7 @@ docker compose down                   # 停止并删除
 
 ### 四、查看客户端配置
 
-容器**每次启动**都会在日志中打印一份可直接粘贴到 Surge 的配置，无需手动拼接：
+容器**首次启动**（新生成配置时）会在日志中打印一份可直接粘贴到 Surge 的配置，无需手动拼接；后续重启不再在日志中打印明文 PSK：
 
 ```bash
 docker logs snell-server              # docker run 启动
@@ -639,7 +639,8 @@ cat ./snell-config/shadowtls-password     # ShadowTLS 密码
 
 > - 服务器地址由容器自动探测公网 IP 得到；探测失败会显示为 `服务器IP`，可用 `SNELL_SERVER_IP` 手动指定。
 > - 端口按容器内监听端口输出，若宿主机映射了不同端口请自行替换。
-> - 日志中含 PSK 与 ShadowTLS 密码，请勿公开分享容器日志。
+> - 首次启动的日志中含 PSK 与 ShadowTLS 密码，请勿公开分享；后续重启的日志不再含明文 PSK。
+> - 任何时候都可以用 `docker exec <容器名> cat /etc/snell/client-config.txt` 查看完整客户端配置。
 
 ### 五、环境变量
 
