@@ -126,6 +126,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     SNELL_PORT="${SNELL_PORT:-6160}"
 
     # PSK: 优先使用环境变量，否则自动生成
+    # 安全提示：生产环境不要经环境变量传递 PSK（docker inspect 可见明文）；
+    # 留空则在容器首次启动时自动生成强随机 PSK 并写入配置文件持久化
     if [ -z "${SNELL_PSK:-}" ]; then
         SNELL_PSK=$(head -c 16 /dev/urandom | base64)
     fi
@@ -190,14 +192,53 @@ if [ "$SNELL_VER" = "v6" ]; then
     warn_env_ignored "dns-ip-preference" "${SNELL_DNS_IP_PREFERENCE:-}"
 fi
 warn_env_ignored "psk" "${SNELL_PSK:-}"
+warn_env_ignored "dns" "${SNELL_DNS:-}"
+# v4 专属键
+case "$SNELL_VER" in
+    v6|v5) ;;
+    *)
+        warn_env_ignored "ipv6" "${SNELL_IPV6:-}"
+        warn_env_ignored "tfo" "${SNELL_TFO:-}"
+        ;;
+esac
+# listen 由 SNELL_LISTEN_HOST:SNELL_PORT 组合而成，单独比对
+_current_listen="$(config_get listen)"
+if [ -n "$_current_listen" ]; then
+    _current_port="$(config_listen_port)"
+    if [ -n "${SNELL_PORT:-}" ] && [ -n "$_current_port" ] && [ "${SNELL_PORT}" != "$_current_port" ]; then
+        echo "提示: 环境变量指定 SNELL_PORT = ${SNELL_PORT}，但现有配置监听端口为 ${_current_port}"
+        echo "      配置文件已存在，不会被环境变量覆盖，本次仍使用 ${_current_port}"
+    fi
+    if [ -n "${SNELL_LISTEN_HOST:-}" ]; then
+        case "${_current_listen}" in
+            "${SNELL_LISTEN_HOST}:"*) ;;
+            *)
+                echo "提示: 环境变量指定 SNELL_LISTEN_HOST = ${SNELL_LISTEN_HOST}，但现有配置监听地址为 ${_current_listen}"
+                echo "      配置文件已存在，不会被环境变量覆盖"
+                ;;
+        esac
+    fi
+fi
+unset _current_listen _current_port
+# ShadowTLS 密码：环境变量与已持久化的密码不一致时提示（端口/SNI 每次启动都直接生效，无持久化）
+if is_enabled "${SHADOWTLS_ENABLE:-0}" && [ -n "${SHADOWTLS_PASSWORD:-}" ] && [ -f "$SHADOWTLS_PASSWORD_FILE" ]; then
+    _saved_pwd="$(cat "$SHADOWTLS_PASSWORD_FILE")"
+    if [ "$_saved_pwd" != "${SHADOWTLS_PASSWORD}" ]; then
+        echo "提示: 环境变量 SHADOWTLS_PASSWORD 与已保存的密码不一致，本次启动将使用环境变量的值"
+        echo "      注意：不要在生产环境经环境变量传递密码（docker inspect 可见明文）"
+    fi
+    unset _saved_pwd
+fi
 
-# --- 3. 输出服务端配置 ---
+# --- 3. 输出服务端配置（PSK 脱敏，避免明文写入 docker logs） ---
 echo
 echo "===== 服务端配置 (${CONFIG_FILE}) ====="
-cat "$CONFIG_FILE"
+sed 's/^[[:space:]]*psk[[:space:]]*=.*/psk = ****/' "$CONFIG_FILE"
 echo
 
 # --- 4. ShadowTLS 密码准备（需在打印客户端配置之前完成） ---
+# 安全提示：生产环境不要经环境变量传递 SHADOWTLS_PASSWORD（docker inspect 可见明文）；
+# 留空则在容器首次启动时自动生成强随机密码并写入密码文件持久化
 if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
     if [ -z "${SHADOWTLS_PASSWORD:-}" ]; then
         if [ -f "$SHADOWTLS_PASSWORD_FILE" ]; then
@@ -216,19 +257,25 @@ echo
 
 # --- 6. 启动服务 ---
 if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
+    # ShadowTLS 后端必须指向 Snell 的实际监听端口：始终从配置文件解析，
+    # 不直接信任 SNELL_PORT 环境变量，避免两者不一致时静默连到错误端口
     CONFIG_SNELL_PORT="$(config_listen_port || true)"
-    SNELL_PORT="${SNELL_PORT:-${CONFIG_SNELL_PORT:-6160}}"
+    BACKEND_PORT="${CONFIG_SNELL_PORT:-6160}"
+    if [ -n "${SNELL_PORT:-}" ] && [ -n "$CONFIG_SNELL_PORT" ] && [ "${SNELL_PORT}" != "$CONFIG_SNELL_PORT" ]; then
+        echo "警告: 环境变量 SNELL_PORT=${SNELL_PORT} 与配置文件监听端口 ${CONFIG_SNELL_PORT} 不一致，"
+        echo "      ShadowTLS 后端将连接配置文件的实际端口 ${CONFIG_SNELL_PORT}（环境变量值已忽略）"
+    fi
     SHADOWTLS_PORT="${SHADOWTLS_PORT:-8443}"
     SHADOWTLS_SNI="${SHADOWTLS_SNI:-www.microsoft.com}"
 
-    echo "启动 Snell 后端: 127.0.0.1:${SNELL_PORT}"
+    echo "启动 Snell 后端: 127.0.0.1:${BACKEND_PORT}"
     /app/snell-server -c "$CONFIG_FILE" &
     snell_pid=$!
 
-    echo "启动 ShadowTLS v3: 0.0.0.0:${SHADOWTLS_PORT} -> 127.0.0.1:${SNELL_PORT}, SNI=${SHADOWTLS_SNI}"
+    echo "启动 ShadowTLS v3: 0.0.0.0:${SHADOWTLS_PORT} -> 127.0.0.1:${BACKEND_PORT}, SNI=${SHADOWTLS_SNI}"
     /app/shadow-tls --v3 server \
         --listen "0.0.0.0:${SHADOWTLS_PORT}" \
-        --server "127.0.0.1:${SNELL_PORT}" \
+        --server "127.0.0.1:${BACKEND_PORT}" \
         --tls "${SHADOWTLS_SNI}" \
         --password "${SHADOWTLS_PASSWORD}" &
     shadowtls_pid=$!

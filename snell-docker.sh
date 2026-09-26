@@ -30,6 +30,8 @@ SNELL_VERSION_CHOICE=""
 SNELL_VERSION=""
 CONTAINER_NAME="snell-server"
 IMAGE_NAME="my-snell"
+# 脚本所在目录（在 cd 到临时工作目录之前解析，供 create_dockerfile 查找 entrypoint.sh）
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- 基础函数 ---
 
@@ -132,6 +134,14 @@ check_docker() {
         if [ -f /etc/alpine-release ]; then
             apk add --no-cache docker docker-cli-compose
         else
+            echo -e "${YELLOW}将从 https://get.docker.com 下载 Docker 官方安装脚本并直接管道执行。${RESET}"
+            echo -e "${YELLOW}注意：管道执行远程脚本存在供应链风险，请确认你信任该来源。${RESET}"
+            printf "确认继续安装 Docker？[y/N]: "
+            read -r confirm_pipe_install
+            if [ "$confirm_pipe_install" != "y" ] && [ "$confirm_pipe_install" != "Y" ]; then
+                echo -e "${RED}已取消 Docker 安装。${RESET}"
+                exit 1
+            fi
             curl -fsSL https://get.docker.com | sh
         fi
 
@@ -350,6 +360,25 @@ create_dockerfile() {
 
     echo -e "${CYAN}创建 Dockerfile (多阶段构建: Debian提取glibc + Alpine运行)...${RESET}"
 
+    # 准备 entrypoint.sh：容器首次启动时由它自动生成配置与 PSK，
+    # 不再把含明文 PSK 的配置文件烘焙进镜像层
+    if [ -f "${SCRIPT_DIR}/entrypoint.sh" ]; then
+        cp "${SCRIPT_DIR}/entrypoint.sh" ./entrypoint.sh
+        echo -e "${GREEN}✓ 已复用 entrypoint.sh${RESET}"
+    else
+        echo -e "${CYAN}正在下载 entrypoint.sh...${RESET}"
+        if ! curl -fsSL -o ./entrypoint.sh "https://raw.githubusercontent.com/jinqians/snell.sh/main/entrypoint.sh"; then
+            echo -e "${RED}✗ entrypoint.sh 下载失败${RESET}"
+            return 1
+        fi
+        if [ ! -s ./entrypoint.sh ] || ! sh -n ./entrypoint.sh 2>/dev/null; then
+            echo -e "${RED}✗ entrypoint.sh 校验失败（空文件或语法错误），已丢弃${RESET}"
+            rm -f ./entrypoint.sh
+            return 1
+        fi
+        echo -e "${GREEN}✓ entrypoint.sh 下载并校验通过${RESET}"
+    fi
+
     cat > Dockerfile << EOF
 # 第一阶段: 使用 Debian 下载二进制并提供 glibc 运行时库
 FROM debian:bookworm-slim AS builder
@@ -372,62 +401,35 @@ COPY --from=builder /usr/lib/${gnu_lib_dir}/ /usr/glibc-compat/lib/
 RUN ${ld_linker_cmd}
 ENV LD_LIBRARY_PATH=/usr/glibc-compat/lib
 RUN mkdir -p /etc/snell
-COPY snell-config/snell-server.conf /etc/snell/snell-server.conf
+# 不再 COPY 含明文 PSK 的配置文件：配置与 PSK 由 entrypoint.sh 在容器首次启动时自动生成，
+# 经 -v /etc/snell-docker:/etc/snell 持久化到宿主机，避免 secret 烘焙进镜像层
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+ENV SNELL_PORT=${PORT}
+ENV SNELL_VER=${SNELL_VERSION_CHOICE}
 EXPOSE ${PORT}/tcp ${PORT}/udp
-CMD exec /app/snell-server -c /etc/snell/snell-server.conf
+ENTRYPOINT ["/app/entrypoint.sh"]
 EOF
 
     echo -e "${GREEN}✓ Dockerfile 创建完成${RESET}"
 }
 
-# 生成 PSK：不依赖 openssl（Alpine 最小安装默认没有 openssl，
-# 以前 openssl 缺失时 PSK 为空，snell-server 启动即退出）
-generate_psk() {
-    head -c 16 /dev/urandom | base64 | tr -d '\n'
-}
-
 create_config_file() {
-    local psk
-    psk=$(generate_psk)
-    if [ -z "$psk" ]; then
-        echo -e "${RED}✗ PSK 生成失败${RESET}"
-        return 1
-    fi
+    echo -e "${CYAN}准备配置目录...${RESET}"
 
-    echo -e "${CYAN}创建 Snell 配置文件...${RESET}"
-    
-    # 创建临时配置目录
-    mkdir -p ./snell-config
-    # 同时创建持久配置目录
+    # 配置目录经 -v 挂载进容器；配置文件与 PSK 由容器内 entrypoint.sh 在首次启动时自动生成，
+    # 不再把含明文 PSK 的配置文件烘焙进镜像层
     mkdir -p /etc/snell-docker
-    
-    # 根据版本创建不同的配置文件格式
-    # v6 使用 mode / dns-ip-preference；ipv6、tfo、obfs 在 v6 已不再使用
-    {
-        echo "[snell-server]"
-        echo "listen = 0.0.0.0:${PORT}"
-        echo "psk = ${psk}"
-        if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
-            echo "mode = ${SNELL_MODE}"
-            echo "dns-ip-preference = default"
-        elif [ "$SNELL_VERSION_CHOICE" != "v5" ]; then
-            echo "ipv6 = true"
-            echo "tfo = true"
-        fi
-        echo "version-choice = ${SNELL_VERSION_CHOICE}"
-    } > ./snell-config/snell-server.conf
+    # 容器以 nobody（uid 65534）运行，挂载目录必须对其可写，否则 entrypoint 无法生成配置
+    chown -R 65534:65533 /etc/snell-docker 2>/dev/null || \
+        echo -e "${YELLOW}提示: 无法设置 /etc/snell-docker 属主，若容器启动失败请手动执行 chown -R 65534:65533 /etc/snell-docker${RESET}"
 
-    # 复制到持久位置
-    cp ./snell-config/snell-server.conf /etc/snell-docker/
-
-    echo -e "${GREEN}✓ 配置文件创建完成${RESET}"
-    echo -e "${GREEN}✓ 配置文件已保存到持久位置${RESET}"
-    echo -e "${YELLOW}端口: ${PORT}${RESET}"
-    echo -e "${YELLOW}PSK: ${psk}${RESET}"
-    
     # 保存配置信息到变量
     SNELL_PORT="$PORT"
-    SNELL_PSK="$psk"
+
+    echo -e "${GREEN}✓ 配置目录就绪: /etc/snell-docker${RESET}"
+    echo -e "${YELLOW}端口: ${PORT}${RESET}"
+    echo -e "${YELLOW}PSK 将在容器首次启动时自动生成，可通过 docker logs 查看客户端配置${RESET}"
 }
 
 build_docker_image() {
@@ -451,10 +453,12 @@ start_snell_container() {
     # 第一步：不带 --restart 先测试启动，避免崩溃循环
     echo -e "${CYAN}测试启动容器...${RESET}"
     local run_output
+    # -v /etc/snell-docker:/etc/snell：配置与 PSK 由 entrypoint 在首次启动时生成并持久化到宿主机
     run_output=$(docker run -d \
         --name "${CONTAINER_NAME}" \
         -p "${SNELL_PORT}:${SNELL_PORT}/tcp" \
         -p "${SNELL_PORT}:${SNELL_PORT}/udp" \
+        -v /etc/snell-docker:/etc/snell \
         "${IMAGE_NAME}:latest" 2>&1)
     
     if [ $? -ne 0 ]; then
@@ -490,13 +494,13 @@ start_snell_container() {
             # 使用 sh 启动一个临时容器检查镜像内容
             docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
             echo -e "${CYAN}镜像内 /app 目录:${RESET}"
-            docker run --rm "${IMAGE_NAME}:latest" sh -c "ls -la /app/ 2>&1" 2>&1 | sed 's/^/   /'
+            docker run --rm --entrypoint sh "${IMAGE_NAME}:latest" -c "ls -la /app/ 2>&1" 2>&1 | sed 's/^/   /'
             echo -e "${CYAN}镜像内 /etc/snell 目录:${RESET}"
-            docker run --rm "${IMAGE_NAME}:latest" sh -c "ls -la /etc/snell/ 2>&1" 2>&1 | sed 's/^/   /'
+            docker run --rm --entrypoint sh -v /etc/snell-docker:/etc/snell "${IMAGE_NAME}:latest" -c "ls -la /etc/snell/ 2>&1" 2>&1 | sed 's/^/   /'
             echo -e "${CYAN}二进制文件信息:${RESET}"
-            docker run --rm "${IMAGE_NAME}:latest" sh -c "file /app/snell-server 2>&1" 2>&1 | sed 's/^/   /'
+            docker run --rm --entrypoint sh "${IMAGE_NAME}:latest" -c "file /app/snell-server 2>&1" 2>&1 | sed 's/^/   /'
             echo -e "${CYAN}手动执行测试:${RESET}"
-            docker run --rm "${IMAGE_NAME}:latest" sh -c "/app/snell-server -c /etc/snell/snell-server.conf" 2>&1 | head -5 | sed 's/^/   /'
+            docker run --rm --entrypoint sh -v /etc/snell-docker:/etc/snell "${IMAGE_NAME}:latest" -c "/app/snell-server -c /etc/snell/snell-server.conf" 2>&1 | head -5 | sed 's/^/   /'
         fi
         
         docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true

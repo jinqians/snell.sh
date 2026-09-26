@@ -811,16 +811,22 @@ get_system_dns() {
     echo "1.1.1.1,8.8.8.8"
 }
 
-# 获取用户输入的 DNS 服务器
+# 获取用户输入的 DNS 服务器（校验 IPv4/IPv6/域名，非法输入要求重填）
 get_dns() {
-    read -rp "请输入 DNS 服务器地址 (直接回车使用系统DNS): " custom_dns
-    if [ -z "$custom_dns" ]; then
-        DNS=$(get_system_dns)
-        echo -e "${GREEN}使用系统 DNS 服务器: $DNS${RESET}"
-    else
-        DNS=$custom_dns
-        echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
-    fi
+    while true; do
+        read -rp "请输入 DNS 服务器地址 (直接回车使用系统DNS): " custom_dns
+        if [ -z "$custom_dns" ]; then
+            DNS=$(get_system_dns)
+            echo -e "${GREEN}使用系统 DNS 服务器: $DNS${RESET}"
+            return 0
+        fi
+        if validate_dns_input "$custom_dns"; then
+            DNS="${custom_dns//[[:space:]]/}"
+            echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
+            return 0
+        fi
+        echo -e "${RED}DNS 地址格式无效，请输入 IPv4/IPv6 地址或域名（多个请用英文逗号分隔）${RESET}"
+    done
 }
 
 # 保存 nftables 规则
@@ -937,6 +943,58 @@ open_port() {
     fi
 }
 
+# 在 nftables 中关闭端口（按 handle 精确删除该端口的 accept 规则）
+close_nftables_port() {
+    local PORT=$1
+
+    if ! command -v nft &> /dev/null; then
+        return
+    fi
+
+    nft -a list ruleset 2>/dev/null | awk -v port="$PORT" '
+        $1 == "table" {
+            family=$2
+            table=$3
+            gsub(/[{}]/, "", table)
+        }
+        $1 == "chain" {
+            chain=$2
+            gsub(/[{}]/, "", chain)
+        }
+        ($0 ~ "tcp dport " port " .*accept" || $0 ~ "udp dport " port " .*accept") && /# handle/ {
+            handle=$NF
+            print family " " table " " chain " " handle
+        }
+    ' | while read -r family table chain handle; do
+        [ -z "$handle" ] && continue
+        nft delete rule "$family" "$table" "$chain" handle "$handle" 2>/dev/null || true
+    done
+
+    save_nftables_rules
+}
+
+# 关闭端口的防火墙规则（ufw / iptables / nftables，与 open_port 对应）
+close_port() {
+    local PORT=$1
+
+    echo -e "${CYAN}关闭端口 $PORT 的防火墙规则${RESET}"
+
+    if command -v ufw &> /dev/null; then
+        ufw delete allow "$PORT"/tcp >/dev/null 2>&1 || true
+        ufw delete allow "$PORT"/udp >/dev/null 2>&1 || true
+    fi
+
+    if command -v iptables &> /dev/null; then
+        iptables -D INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || true
+        iptables -D INPUT -p udp --dport "$PORT" -j ACCEPT 2>/dev/null || true
+        if [ -d "/etc/iptables" ]; then
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        fi
+    fi
+
+    close_nftables_port "$PORT"
+}
+
 # 获取主用户端口
 get_main_port() {
     if [ -f "${SNELL_CONF_FILE}" ]; then
@@ -1000,14 +1058,102 @@ check_port_usage() {
             fi
         done
     fi
-    # 检查主配置文件
+    # 检查主配置文件（遗留路径）
     if [ -f "${SNELL_CONF_DIR}/snell-server.conf" ]; then
         local main_port=$(grep -E '^listen' "${SNELL_CONF_DIR}/snell-server.conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
         if [ "$main_port" == "$port" ]; then
             return 1
         fi
     fi
+    # 检查系统实际监听端口（ss 不存在时跳过）
+    if command -v ss &> /dev/null; then
+        if ss -tulnH 2>/dev/null | grep -q ":${port} "; then
+            return 1
+        fi
+    fi
     return 0
+}
+
+# 校验用户输入的端口：纯数字 + 范围 1-65535；显式拒绝 main（主配置）
+validate_user_port() {
+    local port="$1"
+    if [ "$port" = "main" ]; then
+        echo -e "${RED}不能直接操作主用户配置（snell-main.conf），请用主脚本管理主用户${RESET}"
+        return 1
+    fi
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        echo -e "${RED}无效端口号，请输入 1 到 65535 之间的数字${RESET}"
+        return 1
+    fi
+    return 0
+}
+
+# 校验单个 DNS 主机：IPv4 / IPv6 / 域名
+validate_dns_host() {
+    local host="$1"
+    # IPv4：四段数字，每段 0-255
+    if [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        local seg old_ifs="$IFS"
+        IFS='.'
+        for seg in $host; do
+            if [ "$seg" -gt 255 ] 2>/dev/null; then
+                IFS="$old_ifs"
+                return 1
+            fi
+        done
+        IFS="$old_ifs"
+        return 0
+    fi
+    # IPv6：含冒号的十六进制组（宽松校验，snell 侧会再解析）
+    if [[ "$host" == *:* ]] && [[ "$host" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        return 0
+    fi
+    # 域名：字母数字点横线，不以点/横线开头结尾
+    if [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# 校验 DNS 输入：允许英文逗号分隔的多个地址
+validate_dns_input() {
+    local dns_input="$1" item
+    dns_input="${dns_input//[[:space:]]/}"
+    [ -n "$dns_input" ] || return 1
+    local old_ifs="$IFS"
+    IFS=','
+    for item in $dns_input; do
+        if ! validate_dns_host "$item"; then
+            IFS="$old_ifs"
+            return 1
+        fi
+    done
+    IFS="$old_ifs"
+    return 0
+}
+
+# 多用户数据并发锁：add/delete/modify 是典型的 check-then-act，
+# 加锁防止两个管理会话同时操作同一端口导致配置互相覆盖
+multi_user_lock() {
+    if ! command -v flock &> /dev/null; then
+        echo -e "${YELLOW}未找到 flock，跳过并发锁${RESET}"
+        return 0
+    fi
+    if ! exec 200>"${SNELL_CONF_DIR}/.multi-user.lock" 2>/dev/null; then
+        echo -e "${RED}无法创建锁文件，已取消操作${RESET}"
+        return 1
+    fi
+    if ! flock -n 200 2>/dev/null; then
+        echo -e "${RED}另有用户管理操作正在进行，请稍后再试${RESET}"
+        exec 200>&- 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
+multi_user_unlock() {
+    flock -u 200 2>/dev/null || true
+    exec 200>&- 2>/dev/null || true
 }
 
 
@@ -1224,8 +1370,14 @@ switch_user_conf_version() {
         return 1
     fi
 
-    # v6 的 mode / dns-ip-preference 按这个用户单独选
+    # v6 的 mode / dns-ip-preference 按这个用户单独选；
+    # 先按本配置文件重置 IPV6_ENABLE，避免沿用之前 add_user 的残留值
     if [ "$target_version" = "v6" ]; then
+        IPV6_ENABLE="true"
+        if grep -Eq '^[[:space:]]*ipv6[[:space:]]*=[[:space:]]*false' "$conf_file" \
+            || grep -Eq '^[[:space:]]*dns-ip-preference[[:space:]]*=[[:space:]]*ipv4-only' "$conf_file"; then
+            IPV6_ENABLE="false"
+        fi
         configure_snell_v6_options "$conf_file"
     fi
 
@@ -1280,6 +1432,11 @@ switch_user_conf_version() {
 
 # 添加新用户
 add_user() {
+    # 并发锁（函数返回时自动释放）；重置 IPV6_ENABLE，避免沿用上次调用的残留值
+    multi_user_lock || return 1
+    trap 'multi_user_unlock' RETURN
+    IPV6_ENABLE="true"
+
     echo -e "\n${YELLOW}=== 添加新用户 ===${RESET}"
     
     # 创建用户配置目录
@@ -1386,31 +1543,45 @@ add_user() {
 
 # 删除用户
 delete_user() {
+    # 并发锁（函数返回时自动释放）
+    multi_user_lock || return 1
+    trap 'multi_user_unlock' RETURN
+
     echo -e "\n${YELLOW}=== 删除用户 ===${RESET}"
-    
+
     # 显示用户列表
     list_users
-    
-    # 获取要删除的用户端口
+
+    # 获取要删除的用户端口（纯数字校验，拒绝 main 主配置）
     read -rp "请输入要删除的用户端口号: " del_port
-    
+    if ! validate_user_port "$del_port"; then
+        return 1
+    fi
+
     local user_conf="${SNELL_CONF_DIR}/users/snell-${del_port}.conf"
     local service_name="snell-${del_port}"
-    
+
     if [ -f "$user_conf" ]; then
         # 停止并禁用服务
-        systemctl stop "$service_name"
-        systemctl disable "$service_name"
-        
+        systemctl stop "$service_name" 2>/dev/null || true
+        systemctl disable "$service_name" 2>/dev/null || true
+
         # 删除服务文件
         rm -f "${SYSTEMD_DIR}/${service_name}.service"
         rm -f "/lib/systemd/system/${service_name}.service"
         # 删除配置文件
         rm -f "$user_conf"
-        
+
+        # 关闭该端口的防火墙规则
+        close_port "$del_port"
+
+        # 清理该端口在 backup/ 下的旧备份（含明文 PSK）
+        rm -f "${SNELL_CONF_DIR}/backup/snell-${del_port}.conf".* 2>/dev/null
+        rm -f "${SNELL_CONF_DIR}/backup/snell-${del_port}.service".* 2>/dev/null
+
         # 重载 systemd 配置
         systemctl daemon-reload
-        
+
         echo -e "${GREEN}用户已成功删除${RESET}"
     else
         echo -e "${RED}未找到端口为 ${del_port} 的用户${RESET}"
@@ -1419,14 +1590,21 @@ delete_user() {
 
 # 修改用户配置
 modify_user() {
+    # 并发锁（函数返回时自动释放）
+    multi_user_lock || return 1
+    trap 'multi_user_unlock' RETURN
+
     echo -e "\n${YELLOW}=== 修改用户配置 ===${RESET}"
-    
+
     # 显示用户列表
     list_users
-    
-    # 获取要修改的用户端口
+
+    # 获取要修改的用户端口（纯数字校验，拒绝 main 主配置）
     read -rp "请输入要修改的用户端口号: " mod_port
-    
+    if ! validate_user_port "$mod_port"; then
+        return 1
+    fi
+
     local user_conf="${SNELL_CONF_DIR}/users/snell-${mod_port}.conf"
     local service_name="snell-${mod_port}"
     
@@ -1459,27 +1637,61 @@ modify_user() {
                 local mod_version
                 mod_version=$(get_conf_snell_version "$user_conf")
 
-                # 停止并注销旧服务
-                systemctl stop "$service_name"
-                systemctl disable "$service_name" 2>/dev/null
+                # 备份旧配置与旧服务文件，新端口启动失败时回滚
+                local stamp backup_old_conf backup_old_unit new_conf
+                stamp=$(date +%Y%m%d_%H%M%S)
+                backup_old_conf=$(snell_backup_path "$user_conf" "$stamp")
+                backup_old_unit=""
+                if [ -n "$backup_old_conf" ] && cp -a "$user_conf" "$backup_old_conf" 2>/dev/null; then
+                    if [ -f "${SYSTEMD_DIR}/${service_name}.service" ]; then
+                        backup_old_unit=$(snell_backup_path "${SYSTEMD_DIR}/${service_name}.service" "$stamp")
+                        cp -a "${SYSTEMD_DIR}/${service_name}.service" "$backup_old_unit" 2>/dev/null || backup_old_unit=""
+                    fi
+                else
+                    echo -e "${RED}备份旧配置失败，已中止改端口${RESET}"
+                    return 1
+                fi
 
-                # 修改配置文件中的端口
-                sed -i "s/\(listen = .*:\)${mod_port}/\1${new_port}/" "$user_conf"
+                # 停止并注销旧服务
+                systemctl stop "$service_name" 2>/dev/null || true
+                systemctl disable "$service_name" 2>/dev/null || true
+
+                # 修改配置文件中的端口（尾部锚定：mod_port=5 不会误改 :12345）
+                sed -i "s/\(listen = .*:\)${mod_port}$/\1${new_port}/" "$user_conf"
+                if ! grep -Eq "^listen = .*:${new_port}$" "$user_conf"; then
+                    echo -e "${RED}配置文件端口替换失败，已中止${RESET}"
+                    systemctl enable "$service_name" 2>/dev/null || true
+                    restart_and_verify_service "$service_name" || true
+                    return 1
+                fi
 
                 # 重命名配置文件，服务文件整份重写（Description 带版本号，逐行 sed 已不适用）
-                local new_conf="${SNELL_CONF_DIR}/users/snell-${new_port}.conf"
+                new_conf="${SNELL_CONF_DIR}/users/snell-${new_port}.conf"
                 mv "$user_conf" "$new_conf"
                 rm -f "${SYSTEMD_DIR}/${service_name}.service"
                 write_user_service_unit "$new_port" "$new_conf" "$mod_version"
 
                 # 重载配置并启动服务
                 systemctl daemon-reload
-                systemctl enable "snell-${new_port}" 2>/dev/null
+                systemctl enable "snell-${new_port}" 2>/dev/null || true
                 if restart_and_verify_service "snell-${new_port}"; then
+                    # 成功：关闭旧端口防火墙规则，开放新端口
+                    close_port "$mod_port"
                     open_port "$new_port"
                     echo -e "${GREEN}端口修改成功: ${mod_port} -> ${new_port}${RESET}"
                 else
-                    echo -e "${RED}新端口服务启动失败，请检查上面的日志${RESET}"
+                    echo -e "${RED}新端口服务启动失败，正在回滚...${RESET}"
+                    systemctl disable "snell-${new_port}" 2>/dev/null || true
+                    rm -f "${SYSTEMD_DIR}/snell-${new_port}.service" "$new_conf"
+                    cat "$backup_old_conf" > "$user_conf"
+                    [ -n "$backup_old_unit" ] && cat "$backup_old_unit" > "${SYSTEMD_DIR}/${service_name}.service"
+                    systemctl daemon-reload 2>/dev/null || true
+                    systemctl enable "$service_name" 2>/dev/null || true
+                    if restart_and_verify_service "$service_name"; then
+                        echo -e "${YELLOW}已回滚到端口 ${mod_port}，服务恢复正常${RESET}"
+                    else
+                        echo -e "${RED}回滚后服务仍未启动，请手动检查: systemctl status ${service_name}${RESET}"
+                    fi
                 fi
                 ;;
             2)
@@ -1490,9 +1702,11 @@ modify_user() {
                 echo -e "${GREEN}PSK 已重置为: ${new_psk}${RESET}"
                 ;;
             3)
-                # 修改 DNS
+                # 修改 DNS（get_dns 已做格式校验；sed 转义 & 与分隔符，防止注入/语法错误）
                 get_dns
-                sed -i "s/dns = .*/dns = ${DNS}/" "$user_conf"
+                local dns_escaped
+                dns_escaped=$(printf '%s' "$DNS" | sed 's/[&|\\]/\\&/g')
+                sed -i "s|^[[:space:]]*dns[[:space:]]*=[[:space:]]*.*|dns = ${dns_escaped}|" "$user_conf"
                 systemctl restart "$service_name"
                 echo -e "${GREEN}DNS 修改成功${RESET}"
                 ;;
@@ -1520,9 +1734,12 @@ show_user_config() {
     # 显示用户列表
     list_users
     
-    # 获取要查看的用户端口
+    # 获取要查看的用户端口（纯数字校验，拒绝 main 主配置）
     read -rp "请输入要查看的用户端口号: " view_port
-    
+    if ! validate_user_port "$view_port"; then
+        return 1
+    fi
+
     local user_conf="${SNELL_CONF_DIR}/users/snell-${view_port}.conf"
     
     if [ -f "$user_conf" ]; then

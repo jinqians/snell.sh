@@ -373,11 +373,12 @@ rc-service docker start
 Snell 主脚本菜单：
 
 ```
-=== 基础功能 ===        === 增强功能 ===        === 系统功能 ===
-1. 安装 Snell            5. ShadowTLS 管理       8.  版本管理
-2. 卸载 Snell            6. BBR 管理             9.  更新脚本
-3. 查看配置              7. 多用户管理           10. 查看服务状态
-4. 重启服务                                      11. Snell v5/v6 出口控制设置
+1.  安装 Snell   7.  多用户管理
+2.  卸载 Snell   8.  版本管理（更新 / 追加通道 / 切换通道）
+3.  查看配置     9.  更新脚本
+4.  重启服务     10. 查看服务状态
+5.  ShadowTLS 管理  11. Snell v5/v6 出口控制设置
+6.  BBR 管理     0.  退出脚本
 ```
 
 安装完成后选择 **3. 查看配置**，脚本会输出带国家/地区标识的 Surge 配置，直接复制即可：
@@ -419,6 +420,10 @@ HK = snell, 1.2.3.4, 7000, psk = yyyyyyyyyyyy, version = 6, mode = default, reus
 > 否则重启后 dockerd 不会启动，容器全部离线。
 
 #### 1. 仅 Snell
+
+> 容器以非特权用户 `nobody`（uid 65534）运行，挂载的配置目录必须对其可写，
+> 否则 entrypoint 无法生成配置。启动前执行一次：
+> `mkdir -p ./snell-config && chown -R 65534:65533 ./snell-config`
 
 ```bash
 docker run -d --name snell-server \

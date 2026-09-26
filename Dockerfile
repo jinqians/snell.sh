@@ -56,7 +56,7 @@ ARG SNELL_VER
 ARG SHADOWTLS_VERSION
 ARG BUILD_CREATED
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates iproute2
 
 WORKDIR /app
 
@@ -111,13 +111,20 @@ LABEL org.opencontainers.image.title="Snell Server" \
       org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.source="https://github.com/jinqians/snell.sh"
 
-# 创建配置目录和 entrypoint 脚本
-RUN mkdir -p /etc/snell
+# 创建配置目录（nobody 可写，供 entrypoint 首次启动时生成配置）
+RUN mkdir -p /etc/snell && chown nobody:nogroup /etc/snell
 
 # 复制 entrypoint 脚本
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 6160/tcp 6160/udp 8443/tcp
+
+# 以非特权用户运行：Snell 默认监听 6160/8443 高位端口，无需 root
+USER nobody
+
+# 健康检查：从配置文件解析实际监听端口，确认其处于 LISTEN 状态
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD sh -c 'p=$(sed -n "s/.*:\([0-9][0-9]*\)[[:space:]]*$/\1/p" /etc/snell/snell-server.conf | tail -n 1); p=${p:-6160}; ss -tln | grep -q ":$p " || exit 1'
 
 ENTRYPOINT ["/app/entrypoint.sh"]

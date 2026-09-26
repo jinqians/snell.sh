@@ -8,8 +8,8 @@
 
 # --- 0. 清理机制 ---
 # 使用 trap 命令，确保脚本在任何情况下退出时（正常结束、出错、被中断），
-# 都能自动删除临时文件。$$ 代表当前脚本的进程ID。
-TMP_FILE="/tmp/install_payload_$$"
+# 都能自动删除临时文件。临时文件名由 mktemp 随机生成，防止本地攻击者预建符号链接。
+TMP_FILE=$(mktemp /tmp/install_payload.XXXXXX) || { echo "错误：无法创建临时文件。" >&2; exit 1; }
 trap 'rm -f "$TMP_FILE"' EXIT
 
 # --- 1. 权限检查 ---
@@ -58,9 +58,18 @@ ensure_packages() {
 # --- 4. 执行主逻辑 ---
 ensure_packages "curl"
 
-DEBIAN_URL="http://snell.jinqians.com"
-CENTOS_URL="http://snell-centos.jinqians.com"
-ALPINE_URL="http://snell-docker.jinqians.com"
+DEBIAN_URL="https://snell.jinqians.com"
+CENTOS_URL="https://snell-centos.jinqians.com"
+ALPINE_URL="https://snell-docker.jinqians.com"
+
+# 语法检查：优先用 bash -n（可解析 sh 语法），无 bash 时退回 sh -n
+check_syntax() {
+  if command -v bash >/dev/null 2>&1; then
+    bash -n "$1"
+  else
+    sh -n "$1"
+  fi
+}
 
 main() {
   url=$1
@@ -84,6 +93,17 @@ main() {
         # trap 会自动清理失败下载的空文件
         exit 1
       fi
+
+      # 完整性校验：文件非空 + 语法检查，不通过则丢弃并退出
+      if [ ! -s "$TMP_FILE" ]; then
+        echo "错误：下载的文件为空，已中止执行。" >&2
+        exit 1
+      fi
+      if ! check_syntax "$TMP_FILE" 2>/dev/null; then
+        echo "错误：下载的脚本未通过语法检查，已丢弃。" >&2
+        exit 1
+      fi
+      echo "--> 下载文件校验通过。"
 
       echo "--> 下载完成。正在赋予执行权限..."
       chmod +x "$TMP_FILE"

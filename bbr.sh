@@ -22,8 +22,14 @@ fi
 # 配置系统参数和启用 BBR
 configure_system_and_bbr() {
     echo -e "${YELLOW}配置系统参数和BBR...${RESET}"
-    
-    cat > /etc/sysctl.conf << EOF
+
+    # 写入独立的 sysctl.d 配置文件，不覆盖系统原有的 /etc/sysctl.conf
+    local bbr_conf="/etc/sysctl.d/99-snell-bbr.conf"
+    if [ -f "$bbr_conf" ]; then
+        cp -a "$bbr_conf" "${bbr_conf}.bak_$(date +%Y%m%d_%H%M%S)"
+    fi
+
+    cat > "$bbr_conf" << EOF
 fs.file-max = 6815744
 net.ipv4.tcp_no_metrics_save = 1
 net.ipv4.tcp_ecn = 0
@@ -51,7 +57,8 @@ net.ipv6.conf.all.forwarding = 1
 net.ipv6.conf.default.forwarding = 1
 EOF
 
-    sysctl -p
+    # --system 会加载 /etc/sysctl.d/ 下的配置；-p 只读 /etc/sysctl.conf
+    sysctl --system
 
     if lsmod | grep -q tcp_bbr && sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
         echo -e "${GREEN}BBR 和系统参数已成功配置。${RESET}"
@@ -131,8 +138,11 @@ install_bbr3_manual() {
     apt install -y build-essential git
     
     # 克隆源码
-    git clone -b v3 https://github.com/google/bbr.git
-    cd bbr
+    if ! git clone -b v3 https://github.com/google/bbr.git; then
+        echo -e "${RED}源码克隆失败${RESET}"
+        return 1
+    fi
+    cd bbr || { echo -e "${RED}无法进入源码目录${RESET}"; return 1; }
     
     # 编译安装
     make

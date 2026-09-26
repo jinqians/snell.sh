@@ -710,6 +710,12 @@ get_available_port() {
     
     # 如果用户指定了端口
     if [ ! -z "$port" ]; then
+        # 先校验端口为 1-65535 的纯数字，防止非法值或注入
+        if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+            echo -e "${RED}端口不合法，请输入 1-65535 的数字${RESET}" >&2
+            return 1
+        fi
+
         # 检查端口是否已被 ShadowTLS 使用
         for used_port in "${used_ports[@]}"; do
             if [ "$port" = "$used_port" ]; then
@@ -753,6 +759,26 @@ get_available_port() {
     
     echo -e "${RED}无法找到可用端口${RESET}"
     return 1
+}
+
+# 校验 TLS 伪装域名白名单（防 systemd unit 参数注入与换行注入）
+is_valid_tls_domain() {
+    [[ "$1" =~ ^[A-Za-z0-9.-]{1,253}$ ]]
+}
+
+# 交互式读取 TLS 伪装域名，非法输入拒绝并要求重输
+prompt_tls_domain() {
+    while true; do
+        read -rp "请输入 TLS 伪装域名 (直接回车默认为 www.microsoft.com): " tls_domain
+        if [ -z "$tls_domain" ]; then
+            tls_domain="www.microsoft.com"
+            return 0
+        fi
+        if is_valid_tls_domain "$tls_domain"; then
+            return 0
+        fi
+        echo -e "${RED}域名格式非法：仅允许字母、数字、点号和连字符（最长 253 字符），请重新输入${RESET}"
+    done
 }
 
 # 生成 SS 链接和配置
@@ -971,6 +997,27 @@ EOF
     chown root:root "/var/log/shadowtls-${identifier}.log"
 }
 
+# 启动服务并验证运行状态；失败时报错并提示 journalctl，不再静默吞掉错误
+start_and_verify_service() {
+    local unit="$1"
+    # unit 文件刚写入，先 reload 让 systemd 感知
+    systemctl daemon-reload 2>/dev/null
+    if ! systemctl start "$unit"; then
+        echo -e "${RED}服务 ${unit} 启动失败${RESET}"
+        echo -e "${YELLOW}请执行 journalctl -u ${unit} 查看详细错误${RESET}"
+        return 1
+    fi
+    if ! systemctl enable "$unit" 2>/dev/null; then
+        echo -e "${YELLOW}服务 ${unit} 设置开机自启失败，可手动执行 systemctl enable ${unit}${RESET}"
+    fi
+    if ! systemctl is-active --quiet "$unit"; then
+        echo -e "${RED}服务 ${unit} 启动后未能保持运行${RESET}"
+        echo -e "${YELLOW}请执行 journalctl -u ${unit} 查看详细错误${RESET}"
+        return 1
+    fi
+    return 0
+}
+
 # 安装 ShadowTLS
 install_shadowtls() {
     echo -e "${CYAN}正在安装 ShadowTLS...${RESET}"
@@ -1022,7 +1069,7 @@ install_shadowtls() {
     # 获取最新版本
     version=$(get_latest_version)
 
-    # 尝试下载：先直连 GitHub，失败则走 ghproxy 镜像
+    # 尝试下载：先直连 GitHub；ghproxy 为不受信第三方镜像，仅用户明确确认后才使用
     binary_name="shadow-tls-${arch}"
     github_url="https://github.com/ihciah/shadow-tls/releases/download/${version}/${binary_name}"
     proxy_url="https://ghproxy.com/${github_url}"
@@ -1031,7 +1078,14 @@ install_shadowtls() {
     echo -e "${YELLOW}下载地址: ${github_url}${RESET}"
 
     if ! wget --timeout=30 --tries=2 -q "$github_url" -O "/tmp/shadow-tls.tmp" 2>/dev/null; then
-        echo -e "${YELLOW}直连 GitHub 失败，尝试使用镜像下载...${RESET}"
+        echo -e "${YELLOW}直连 GitHub 失败。${RESET}"
+        echo -e "${YELLOW}注意：ghproxy.com 是不受信任的第三方镜像站，经其下载的二进制无法验证来源，存在供应链风险。${RESET}"
+        read -rp "是否使用 ghproxy 镜像继续下载？[y/N] " use_proxy
+        if [[ ! "$use_proxy" =~ ^[Yy]$ ]]; then
+            echo -e "${RED}已取消下载${RESET}"
+            rm -f "/tmp/shadow-tls.tmp"
+            exit 1
+        fi
         echo -e "${YELLOW}镜像地址: ${proxy_url}${RESET}"
         if ! wget --timeout=60 --tries=3 "$proxy_url" -O "/tmp/shadow-tls.tmp"; then
             echo -e "${RED}下载 ShadowTLS 失败，请检查网络连接后重试${RESET}"
@@ -1040,7 +1094,7 @@ install_shadowtls() {
         fi
     fi
 
-    # 验证下载的文件不为空
+    # 验证下载的文件不为空（注：上游未发布哈希/签名，此处仅做非空检查，无法验证来源真实性）
     if [ ! -s "/tmp/shadow-tls.tmp" ]; then
         echo -e "${RED}下载文件为空，请重试${RESET}"
         rm -f "/tmp/shadow-tls.tmp"
@@ -1054,11 +1108,8 @@ install_shadowtls() {
     # 生成随机密码
     password=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
     
-    # 获取 TLS 伪装域名
-    read -rp "请输入 TLS 伪装域名 (直接回车默认为 www.microsoft.com): " tls_domain
-    if [ -z "$tls_domain" ]; then
-        tls_domain="www.microsoft.com"
-    fi
+    # 获取 TLS 伪装域名（白名单校验，防止 unit 注入）
+    prompt_tls_domain
     prompt_wildcard_sni
     
     # 让用户选择要为哪个协议设置 ShadowTLS
@@ -1128,8 +1179,7 @@ install_shadowtls() {
         local ss_port=$(get_ssrust_port)
         create_shadowtls_service "ss" "$ss_port" "$ss_listen_port" "$tls_domain" "$password"
         open_port "$ss_listen_port"
-        systemctl start shadowtls-ss
-        systemctl enable shadowtls-ss
+        start_and_verify_service "shadowtls-ss" || return 1
     fi
     
     # 配置 Snell
@@ -1186,8 +1236,7 @@ install_shadowtls() {
                 # 创建服务文件
                 create_shadowtls_service "snell" "$port" "$stls_port" "$tls_domain" "$password"
                 open_port "$stls_port"
-                systemctl start "shadowtls-snell-${port}"
-                systemctl enable "shadowtls-snell-${port}"
+                start_and_verify_service "shadowtls-snell-${port}" || return 1
             done
         elif [[ "$port_choice" =~ ^[0-9]+$ ]] && [ "$port_choice" -ge 1 ] && [ "$port_choice" -le ${#port_list[@]} ]; then
             # 为选中的端口配置 ShadowTLS
@@ -1211,8 +1260,7 @@ install_shadowtls() {
             # 创建服务文件
             create_shadowtls_service "snell" "$selected_port" "$stls_port" "$tls_domain" "$password"
             open_port "$stls_port"
-            systemctl start "shadowtls-snell-${selected_port}"
-            systemctl enable "shadowtls-snell-${selected_port}"
+            start_and_verify_service "shadowtls-snell-${selected_port}" || return 1
         else
             echo -e "${RED}无效的选择${RESET}"
             return 1
@@ -1284,10 +1332,30 @@ uninstall_shadowtls() {
     
     # 删除二进制文件
     rm -f "$INSTALL_DIR/shadow-tls"
-    
+
+    # 清理日志文件
+    rm -f /var/log/shadowtls-*.log
+
+    # 清理 TCP Fast Open 内核参数文件（系统级，删除前询问用户）
+    if [ -f /etc/sysctl.d/99-tcp-fastopen.conf ]; then
+        echo -e "${YELLOW}检测到 /etc/sysctl.d/99-tcp-fastopen.conf，这是系统级内核参数文件（net.ipv4.tcp_fastopen），是否删除？[y/N]${RESET}"
+        read -r del_tfo_conf
+        if [[ "$del_tfo_conf" =~ ^[Yy]$ ]]; then
+            rm -f /etc/sysctl.d/99-tcp-fastopen.conf
+            echo -e "${GREEN}已删除 /etc/sysctl.d/99-tcp-fastopen.conf${RESET}"
+        else
+            echo -e "${YELLOW}已保留 /etc/sysctl.d/99-tcp-fastopen.conf${RESET}"
+        fi
+    fi
+
+    # 清理 nftables 表（不存在时静默跳过）
+    if command -v nft >/dev/null 2>&1; then
+        nft delete table inet shadowtls_filter 2>/dev/null || true
+    fi
+
     # 重新加载 systemd 配置
     systemctl daemon-reload
-    
+
     echo -e "${GREEN}ShadowTLS 已成功卸载${RESET}"
 }
 
@@ -1488,10 +1556,8 @@ add_shadowtls_config() {
                 fi
                 # 获取必要的配置信息
                 password=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
-                read -rp "请输入 TLS 伪装域名 (直接回车默认为 www.microsoft.com): " tls_domain
-                if [ -z "$tls_domain" ]; then
-                    tls_domain="www.microsoft.com"
-                fi
+                # 获取 TLS 伪装域名（白名单校验，防止 unit 注入）
+                prompt_tls_domain
                 prompt_wildcard_sni
                 
                 # 配置 SS 的 ShadowTLS
@@ -1510,8 +1576,7 @@ add_shadowtls_config() {
                 local ss_port=$(get_ssrust_port)
                 create_shadowtls_service "ss" "$ss_port" "$ss_listen_port" "$tls_domain" "$password"
                 open_port "$ss_listen_port"
-                systemctl start shadowtls-ss
-                systemctl enable shadowtls-ss
+                start_and_verify_service "shadowtls-ss" || return 1
                 
                 # 显示配置信息
                 local server_ip=$(get_server_ip)
@@ -1528,10 +1593,8 @@ add_shadowtls_config() {
                 
                 # 获取必要的配置信息
                 password=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
-                read -rp "请输入 TLS 伪装域名 (直接回车默认为 www.microsoft.com): " tls_domain
-                if [ -z "$tls_domain" ]; then
-                    tls_domain="www.microsoft.com"
-                fi
+                # 获取 TLS 伪装域名（白名单校验，防止 unit 注入）
+                prompt_tls_domain
                 prompt_wildcard_sni
                 
                 # 获取所有 Snell 用户配置
@@ -1588,8 +1651,7 @@ add_shadowtls_config() {
                         # 创建服务文件
                         create_shadowtls_service "snell" "$port" "$stls_port" "$tls_domain" "$password"
                         open_port "$stls_port"
-                        systemctl start "shadowtls-snell-${port}"
-                        systemctl enable "shadowtls-snell-${port}"
+                        start_and_verify_service "shadowtls-snell-${port}" || return 1
                         
                         # 显示配置信息
                         local server_ip=$(get_server_ip)
@@ -1616,8 +1678,7 @@ add_shadowtls_config() {
                     # 创建服务文件
                     create_shadowtls_service "snell" "$selected_port" "$stls_port" "$tls_domain" "$password"
                     open_port "$stls_port"
-                    systemctl start "shadowtls-snell-${selected_port}"
-                    systemctl enable "shadowtls-snell-${selected_port}"
+                    start_and_verify_service "shadowtls-snell-${selected_port}" || return 1
                     
                     # 显示配置信息
                     local server_ip=$(get_server_ip)

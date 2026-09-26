@@ -113,8 +113,26 @@ check_curl() {
 # 安装依赖
 install_dependencies() {
     echo -e "${CYAN}正在安装依赖...${RESET}"
-    yum -y update
+    echo -e "${YELLOW}是否先执行全系统更新（yum update，可能耗时较长并升级内核）？[y/N]${RESET}"
+    local do_sys_update=""
+    read -r do_sys_update || do_sys_update=""
+    if [[ "$do_sys_update" == "y" || "$do_sys_update" == "Y" ]]; then
+        yum -y update
+    else
+        echo -e "${YELLOW}已跳过全系统更新，仅安装依赖包${RESET}"
+    fi
     yum -y install curl wget unzip net-tools systemd
+}
+
+# 创建 snell 专用系统用户（已存在则跳过），服务以该用户运行而非 root
+ensure_snell_service_user() {
+    if ! getent group "snell" >/dev/null 2>&1; then
+        groupadd --system "snell" 2>/dev/null || groupadd -r "snell" 2>/dev/null || true
+    fi
+    if ! getent passwd "snell" >/dev/null 2>&1; then
+        useradd --system --no-create-home --shell /usr/sbin/nologin --gid "snell" "snell" 2>/dev/null || \
+        useradd -r -M -s /usr/sbin/nologin -g "snell" "snell" 2>/dev/null || true
+    fi
 }
 
 # === 新增：版本选择函数 ===
@@ -667,6 +685,9 @@ install_snell() {
     mkdir -p ${INSTALL_DIR}
     mkdir -p ${SNELL_CONF_DIR}/users
 
+    # 创建 snell 专用系统用户，服务不再以 root 运行
+    ensure_snell_service_user
+
     # 下载并解压
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
@@ -780,7 +801,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=snell
 ExecStart=${INSTALL_DIR}/snell-server -c ${SNELL_CONF_FILE}
 Restart=on-failure
 RestartSec=5
@@ -799,7 +820,12 @@ EOF
     # 设置权限
     chmod 644 ${SYSTEMD_SERVICE_FILE}
     chmod 644 /usr/lib/systemd/system-preset/90-snell.preset
-    chmod -R 755 ${SNELL_CONF_DIR}
+    chmod 755 ${SNELL_CONF_DIR} ${SNELL_CONF_DIR}/users 2>/dev/null || true
+    # 含 PSK 的配置文件仅 snell 服务用户可读写
+    chmod 600 ${SNELL_CONF_FILE} 2>/dev/null || true
+    if getent passwd "snell" >/dev/null 2>&1; then
+        chown snell:snell ${SNELL_CONF_FILE} 2>/dev/null || true
+    fi
     chmod 755 ${INSTALL_DIR}/snell-server
 
     # 重载并启动服务
@@ -891,20 +917,7 @@ uninstall_snell() {
     systemctl stop snell
     systemctl disable snell
 
-    # 删除服务文件
-    rm -f ${SYSTEMD_SERVICE_FILE}
-
-    # 删除安装目录
-    rm -f ${INSTALL_DIR}/snell-server
-    rm -rf ${SNELL_CONF_DIR}
-    
-    # 删除软链接
-    if [ -L "/usr/bin/snell" ]; then
-        rm -f /usr/bin/snell
-        echo -e "${GREEN}已删除 snell 命令软链接${RESET}"
-    fi
-    
-    # 获取端口号
+    # 先从配置文件读出端口并清理防火墙规则（必须在删除配置目录之前）
     if [ -f "${SNELL_CONF_FILE}" ]; then
         PORT=$(grep "listen" ${SNELL_CONF_FILE} | sed 's/.*://' | tr -d ' ')
         # 关闭防火墙端口
@@ -921,10 +934,26 @@ uninstall_snell() {
             fi
         fi
     fi
-    
+
+    # 删除服务文件
+    rm -f ${SYSTEMD_SERVICE_FILE}
+
+    # 删除安装时创建的 systemd preset
+    rm -f /usr/lib/systemd/system-preset/90-snell.preset
+
+    # 删除安装目录
+    rm -f ${INSTALL_DIR}/snell-server
+    rm -rf ${SNELL_CONF_DIR}
+
+    # 删除管理包装器（安装时写入的是 /usr/local/bin/snell 普通文件）
+    if [ -f "/usr/local/bin/snell" ]; then
+        rm -f /usr/local/bin/snell
+        echo -e "${GREEN}已删除 snell 管理命令${RESET}"
+    fi
+
     # 重载 systemd 配置
     systemctl daemon-reload
-    
+
     echo -e "${GREEN}Snell 已成功卸载${RESET}"
 }
 
