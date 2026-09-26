@@ -15,7 +15,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 #当前版本号
-current_version="3.3"
+current_version="3.4"
 
 # 全局变量：选择的 Snell 版本
 SNELL_VERSION_CHOICE=""
@@ -122,6 +122,15 @@ install_dependencies() {
         echo -e "${YELLOW}已跳过全系统更新，仅安装依赖包${RESET}"
     fi
     yum -y install curl wget unzip net-tools systemd
+    # 校验关键依赖确实可用，yum 失败时给出明确报错而不是在后续步骤报 confusing 的错
+    local missing_deps=()
+    for dep_cmd in curl wget unzip; do
+        command -v "$dep_cmd" &> /dev/null || missing_deps+=("$dep_cmd")
+    done
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo -e "${RED}依赖安装失败，缺少：${missing_deps[*]}。请检查网络/yum 源后重试。${RESET}"
+        exit 1
+    fi
 }
 
 # 创建 snell 专用系统用户（已存在则跳过），服务以该用户运行而非 root
@@ -178,9 +187,9 @@ SNELL_RELEASE_NOTES_URL_ZH="https://kb.nssurge.com/surge-knowledge-base/zh/relea
 # 抓取官方发布页内容
 fetch_snell_release_notes() {
     local notes
-    notes=$(curl -s --max-time 15 "$SNELL_RELEASE_NOTES_URL")
+    notes=$(curl -sL --max-time 15 "$SNELL_RELEASE_NOTES_URL")
     if [ -z "$notes" ]; then
-        notes=$(curl -s --max-time 15 "$SNELL_RELEASE_NOTES_URL_ZH")
+        notes=$(curl -sL --max-time 15 "$SNELL_RELEASE_NOTES_URL_ZH")
     fi
     echo "$notes"
 }
@@ -807,6 +816,15 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=16384
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+# 服务加固：snell-server 只读配置、不写文件系统（与 snell.sh 主 unit 保持一致）
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ReadOnlyPaths=/etc/snell
 
 [Install]
 WantedBy=multi-user.target

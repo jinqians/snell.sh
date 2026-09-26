@@ -119,7 +119,9 @@ mkdir -p "$CONFIG_DIR"
 SNELL_VER="${SNELL_VER:-v4}"
 
 # --- 1. 生成配置文件（仅首次启动） ---
+first_run=0
 if [ ! -f "$CONFIG_FILE" ]; then
+    first_run=1
     echo "配置文件不存在，按环境变量自动生成..."
 
     # 端口: 优先使用环境变量，默认 6160
@@ -252,7 +254,13 @@ if is_enabled "${SHADOWTLS_ENABLE:-0}"; then
 fi
 
 # --- 5. 输出客户端配置 ---
-print_client_config
+# 仅首次启动打印含明文 PSK 的完整客户端配置；后续重启只给提示，
+# 避免每次 docker logs 都泄露 PSK（完整配置已持久化在 client-config.txt）
+if [ "$first_run" = "1" ]; then
+    print_client_config
+else
+    echo "客户端配置已存在，详见 ${CLIENT_FILE}（PSK 不在日志中明文显示）"
+fi
 echo
 
 # --- 6. 启动服务 ---

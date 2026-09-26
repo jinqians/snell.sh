@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 RESET='\033[0m'
 
 # --- 脚本版本号 ---
-current_version="2.3"
+current_version="2.4"
 
 # --- 全局变量 ---
 SNELL_VERSION_CHOICE=""
@@ -618,6 +618,8 @@ EOF
         echo "#version-choice = ${SNELL_VERSION_CHOICE}"
     } > ${SNELL_CONF_FILE}
     chmod 600 ${SNELL_CONF_FILE}
+    # OpenRC 服务以 nobody 运行，配置文件须为其可读（600 + nobody 属主）
+    chown nobody:nobody ${SNELL_CONF_FILE}
 
     # 修正：使用您脚本中更健壮的 OpenRC 服务文件
     cat > ${OPENRC_SERVICE_FILE} << EOF
