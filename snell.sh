@@ -1,186 +1,156 @@
 #!/bin/bash
+# 此文件由 tools/build.sh 从 src/snell.sh 和 src/lib 生成：请修改 src/ 下的文件后重新生成。
 # =========================================
 # 作者: jinqians
 # 日期: 2025年2月
 # 网站：jinqians.com
 # 描述: 这个脚本用于安装、卸载、查看和更新 Snell 代理
+#       Debian / Ubuntu / CentOS / RHEL / Rocky / AlmaLinux / Fedora（systemd）
 # =========================================
 
-# 定义颜色代码
+# 共用部分（src/lib）。发布的 snell.sh 是 tools/build.sh 把它们合进来的单个文件，
+# 直接运行 src/snell.sh 时从旁边的 lib 目录读。
+# ── lib/common.sh ─────────────────────────────────────────────────────────────
+# 所有脚本共用：颜色、root 检查、系统与包管理器、脚本的发布地址。
+# 只用 POSIX sh 的写法：Alpine / Docker 版脚本在 ash、dash 下也要能用。
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-#当前版本号
-current_version="5.7"
+# 脚本的发布地址。短域名（*.jinqians.com）重定向到同一批文件；
+# 脚本自身的更新与管理命令走短域名，运行才会被统计到。
+# 可以用同名环境变量换成镜像地址（测试时指向本地的文件）。
+SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell.sh/main}"
+SNELL_SCRIPT_URL="${SNELL_SCRIPT_URL:-https://snell.jinqians.com}"                     # snell.sh（Debian / Ubuntu / CentOS / RHEL）
+SNELL_ALPINE_SCRIPT_URL="${SNELL_ALPINE_SCRIPT_URL:-https://snell-alpine.jinqians.com}" # snell-alpine.sh
+SNELL_DOCKER_SCRIPT_URL="${SNELL_DOCKER_SCRIPT_URL:-https://snell-docker.jinqians.com}" # snell-docker.sh
+SNELL_MENU_SCRIPT_URL="${SNELL_MENU_SCRIPT_URL:-https://menu.jinqians.com}"             # menu.sh
 
-# 全局变量：选择的 Snell 版本
-SNELL_VERSION_CHOICE=""
+# 检查是否以 root 权限运行
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        printf '%b\n' "${RED}请以 root 权限运行此脚本${RESET}"
+        exit 1
+    fi
+}
 
-# Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
-SNELL_MODE="default"
+# 识别系统：OS_FAMILY = debian | rhel | alpine | unknown，PKG = apt | dnf | yum | apk
+OS_FAMILY=""
+PKG=""
+detect_os() {
+    [ -n "$OS_FAMILY" ] && return 0
+    OS_FAMILY="unknown"
+    if [ -f /etc/os-release ]; then
+        # 在子 shell 里读，os-release 的 NAME / VERSION 等变量不会覆盖脚本自己的
+        case " $(. /etc/os-release; echo "$ID $ID_LIKE" | tr '[:upper:]' '[:lower:]') " in
+            *" debian "*|*" ubuntu "*) OS_FAMILY="debian" ;;
+            *" rhel "*|*" centos "*|*" fedora "*|*" rocky "*|*" almalinux "*) OS_FAMILY="rhel" ;;
+            *" alpine "*) OS_FAMILY="alpine" ;;
+        esac
+    elif [ -f /etc/redhat-release ]; then
+        OS_FAMILY="rhel"
+    fi
+    if command -v apt-get >/dev/null 2>&1; then PKG="apt"
+    elif command -v dnf >/dev/null 2>&1; then PKG="dnf"
+    elif command -v yum >/dev/null 2>&1; then PKG="yum"
+    elif command -v apk >/dev/null 2>&1; then PKG="apk"
+    fi
+}
 
-# Snell v6 DNS 解析地址族偏好：default / prefer-ipv4 / prefer-ipv6 / ipv4-only / ipv6-only
-# 留空表示跟随 IPv6 开关自动推导
-SNELL_DNS_IP_PREFERENCE=""
+# 等待其他 apt 进程完成
+wait_for_apt() {
+    command -v fuser >/dev/null 2>&1 || return 0
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock >/dev/null 2>&1; do
+        printf '%b\n' "${YELLOW}等待其他 apt 进程完成...${RESET}"
+        sleep 2
+    done
+}
 
-# 标记用户是否在本次操作中显式选择过 v6 参数（影响升级时是否覆盖已有配置）
-SNELL_V6_OPTIONS_SET="false"
+# 用系统的包管理器安装软件包
+pkg_install() {
+    detect_os
+    case "$PKG" in
+        apt)
+            wait_for_apt
+            DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null 2>&1 || true
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+            ;;
+        dnf) dnf install -y "$@" ;;
+        yum) yum install -y "$@" ;;
+        apk) apk add --no-cache "$@" ;;
+        *)
+            printf '%b\n' "${RED}未识别的包管理器，请手动安装：$*${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 提供某个命令的软件包名（各发行版不同的在这里对上）
+pkg_for_cmd() {
+    detect_os
+    case "$1" in
+        ip|ss) if [ "$OS_FAMILY" = "rhel" ]; then echo "iproute"; else echo "iproute2"; fi ;;
+        nft) echo "nftables" ;;
+        fuser) echo "psmisc" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# 缺哪个命令就装哪个包；装不上返回非 0，由调用方决定是否退出
+ensure_cmds() {
+    _ec_missing=""
+    for _ec_cmd in "$@"; do
+        command -v "$_ec_cmd" >/dev/null 2>&1 || _ec_missing="${_ec_missing} $(pkg_for_cmd "$_ec_cmd")"
+    done
+    [ -z "$_ec_missing" ] && return 0
+    printf '%b\n' "${YELLOW}正在安装依赖：${_ec_missing# }${RESET}"
+    # shellcheck disable=SC2086 # 包名按空格分开传
+    pkg_install $_ec_missing || return 1
+    for _ec_cmd in "$@"; do
+        if ! command -v "$_ec_cmd" >/dev/null 2>&1; then
+            printf '%b\n' "${RED}安装后仍找不到 ${_ec_cmd}，请手动安装 $(pkg_for_cmd "$_ec_cmd")${RESET}"
+            return 1
+        fi
+    done
+}
+
+# 下载远程脚本并做完整性校验：传输失败即停、非空、语法检查。
+# 只能保证传输完整；仓库本身被篡改要靠发布签名来防。
+fetch_verified_script() {   # <url> <dest>
+    if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 "$1" -o "$2"; then
+        printf '%b\n' "${RED}下载失败: $1${RESET}" >&2
+        rm -f "$2"
+        return 1
+    fi
+    if [ ! -s "$2" ]; then
+        printf '%b\n' "${RED}下载的文件为空，已丢弃: $1${RESET}" >&2
+        rm -f "$2"
+        return 1
+    fi
+    # bash 能解析 sh 写法；没有 bash 的系统（Alpine）用 sh 检查
+    if command -v bash >/dev/null 2>&1; then
+        _fv_shell=bash
+    else
+        _fv_shell=sh
+    fi
+    if ! "$_fv_shell" -n "$2" 2>/dev/null; then
+        printf '%b\n' "${RED}下载的脚本未通过语法检查，已丢弃: $1${RESET}" >&2
+        rm -f "$2"
+        return 1
+    fi
+    return 0
+}
+
+# ── lib/release.sh ────────────────────────────────────────────────────────────
+# Snell 官方版本：从发布页取各大版本的最新版本号，生成下载地址。POSIX sh。
 
 # 抓取失败时的兜底版本号
 SNELL_V4_FALLBACK="v4.1.1"
 SNELL_V5_FALLBACK="v5.0.1"
 SNELL_V6_FALLBACK="v6.0.0rc2"
-
-# === 新增：版本选择函数 ===
-# 选择 Snell 版本
-select_snell_version() {
-    echo -e "${CYAN}请选择要安装的 Snell 版本：${RESET}"
-    echo -e "${GREEN}1.${RESET} Snell v4"
-    echo -e "${GREEN}2.${RESET} Snell v5"
-    echo -e "${GREEN}3.${RESET} Snell v6 (RC)"
-
-    while true; do
-        read -rp "请输入选项 [1-3]: " version_choice
-        case "$version_choice" in
-            1)
-                SNELL_VERSION_CHOICE="v4"
-                echo -e "${GREEN}已选择 Snell v4${RESET}"
-                break
-                ;;
-            2)
-                SNELL_VERSION_CHOICE="v5"
-                echo -e "${GREEN}已选择 Snell v5${RESET}"
-                break
-                ;;
-            3)
-                SNELL_VERSION_CHOICE="v6"
-                echo -e "${GREEN}已选择 Snell v6 (RC)${RESET}"
-                echo -e "${YELLOW}注意：v6 仍为预发布版本，协议可能存在不兼容更新${RESET}"
-                echo -e "${YELLOW}v6 已移除 QUIC 代理模式与 obfs，且不提供 armv7l 构建${RESET}"
-                echo -e "${YELLOW}加密模式：mode = ${SNELL_MODE}（客户端需配置相同的 mode）${RESET}"
-                break
-                ;;
-            *)
-                echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
-                ;;
-        esac
-    done
-}
-
-# === Snell v6 参数选择 ===
-# 加密模式 (mode)：客户端必须配置完全相同的值，否则无法连接
-select_snell_v6_mode() {
-    local current="$1"
-    local default_choice="1"
-    case "$current" in
-        unshaped)   default_choice="2" ;;
-        unsafe-raw) default_choice="3" ;;
-    esac
-
-    echo -e "\n${CYAN}=== Snell v6 加密模式 (mode) ===${RESET}"
-    echo -e "${YELLOW}客户端必须配置与服务端完全相同的 mode，不一致将无法连接${RESET}\n"
-    echo -e "${GREEN}1.${RESET} default     流量混淆 + AES 加密"
-    echo -e "   特征伪装最完整，抗识别与抗封锁能力最强"
-    echo -e "   ${CYAN}建议：绝大多数用户、线路存在干扰或 QoS 时选此项${RESET}"
-    echo -e "${GREEN}2.${RESET} unshaped    关闭混淆，仅 AES 加密"
-    echo -e "   吞吐相比 default 提升约 10%，但流量特征更明显"
-    echo -e "   ${CYAN}建议：线路干净、以速度为先，或已叠加 ShadowTLS 等外层伪装时选此项${RESET}"
-    echo -e "${GREEN}3.${RESET} unsafe-raw  明文转发，不加密不混淆"
-    echo -e "   ${RED}数据可被完整还原，公网环境切勿使用${RESET}"
-    echo -e "   ${CYAN}建议：仅用于内网或完全可信链路的性能测试${RESET}\n"
-
-    while true; do
-        read -rp "请选择加密模式 [1-3]（回车使用 ${default_choice}）: " mode_choice
-        [ -z "$mode_choice" ] && mode_choice="$default_choice"
-        case "$mode_choice" in
-            1) SNELL_MODE="default";    break ;;
-            2) SNELL_MODE="unshaped";   break ;;
-            3)
-                SNELL_MODE="unsafe-raw"
-                echo -e "${RED}警告：unsafe-raw 为明文传输，请确认该链路完全可信！${RESET}"
-                read -rp "确认使用 unsafe-raw? [y/N]: " raw_confirm
-                case "$raw_confirm" in
-                    [yY]|[yY][eE][sS]) break ;;
-                    *) echo -e "${CYAN}已取消，请重新选择${RESET}" ;;
-                esac
-                ;;
-            *) echo -e "${RED}请输入正确的选项 [1-3]${RESET}" ;;
-        esac
-    done
-    echo -e "${GREEN}已选择 mode = ${SNELL_MODE}${RESET}"
-}
-
-# DNS 解析地址族偏好 (dns-ip-preference)：影响服务端解析目标域名后用哪种地址出站
-select_snell_v6_dns_preference() {
-    local current="$1"
-    local default_choice="1"
-
-    # 未指定时按 IPv6 开关推导默认值
-    if [ -z "$current" ]; then
-        [ "$IPV6_ENABLE" = "false" ] && default_choice="4"
-    else
-        case "$current" in
-            default)     default_choice="1" ;;
-            prefer-ipv4) default_choice="2" ;;
-            prefer-ipv6) default_choice="3" ;;
-            ipv4-only)   default_choice="4" ;;
-            ipv6-only)   default_choice="5" ;;
-        esac
-    fi
-
-    echo -e "\n${CYAN}=== Snell v6 DNS 解析偏好 (dns-ip-preference) ===${RESET}"
-    echo -e "${YELLOW}控制服务端解析目标域名后优先使用哪种地址族出站，与监听地址无关${RESET}\n"
-    echo -e "${GREEN}1.${RESET} default       跟随系统默认解析行为"
-    echo -e "   ${CYAN}建议：不确定时选此项，适配绝大多数 VPS${RESET}"
-    echo -e "${GREEN}2.${RESET} prefer-ipv4   双栈可用时优先 IPv4，失败再试 IPv6"
-    echo -e "   ${CYAN}建议：IPv6 出口质量差、或目标站点 IPv6 解锁较差时${RESET}"
-    echo -e "${GREEN}3.${RESET} prefer-ipv6   双栈可用时优先 IPv6，失败再试 IPv4"
-    echo -e "   ${CYAN}建议：IPv6 线路更优，或需要 IPv6 解锁流媒体时${RESET}"
-    echo -e "${GREEN}4.${RESET} ipv4-only     只使用 IPv4 解析结果"
-    echo -e "   ${CYAN}建议：VPS 无 IPv6 出口，避免连接 IPv6 目标时超时等待${RESET}"
-    echo -e "${GREEN}5.${RESET} ipv6-only     只使用 IPv6 解析结果"
-    echo -e "   ${CYAN}建议：IPv6 Only 的 VPS（无 IPv4 出口）${RESET}\n"
-
-    while true; do
-        read -rp "请选择 DNS 解析偏好 [1-5]（回车使用 ${default_choice}）: " dns_pref_choice
-        [ -z "$dns_pref_choice" ] && dns_pref_choice="$default_choice"
-        case "$dns_pref_choice" in
-            1) SNELL_DNS_IP_PREFERENCE="default";     break ;;
-            2) SNELL_DNS_IP_PREFERENCE="prefer-ipv4"; break ;;
-            3) SNELL_DNS_IP_PREFERENCE="prefer-ipv6"; break ;;
-            4) SNELL_DNS_IP_PREFERENCE="ipv4-only";   break ;;
-            5) SNELL_DNS_IP_PREFERENCE="ipv6-only";   break ;;
-            *) echo -e "${RED}请输入正确的选项 [1-5]${RESET}" ;;
-        esac
-    done
-    echo -e "${GREEN}已选择 dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}${RESET}"
-}
-
-# 统一入口：安装 v6 或升级到 v6 时调用，可传入现有配置文件以沿用当前取值
-configure_snell_v6_options() {
-    local conf_file="$1"
-    local current_mode="" current_pref=""
-
-    if [ -n "$conf_file" ] && [ -f "$conf_file" ]; then
-        current_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-        current_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-        if [ -n "$current_mode" ] || [ -n "$current_pref" ]; then
-            echo -e "${CYAN}检测到当前配置：mode = ${current_mode:-未设置}，dns-ip-preference = ${current_pref:-未设置}${RESET}"
-        fi
-    fi
-
-    select_snell_v6_mode "$current_mode"
-    select_snell_v6_dns_preference "$current_pref"
-    SNELL_V6_OPTIONS_SET="true"
-
-    echo -e "\n${CYAN}=== v6 参数确认 ===${RESET}"
-    echo -e "${GREEN}服务端 mode              : ${SNELL_MODE}${RESET}"
-    echo -e "${GREEN}服务端 dns-ip-preference : ${SNELL_DNS_IP_PREFERENCE}${RESET}"
-    echo -e "${YELLOW}客户端对应配置：version = 6, mode = ${SNELL_MODE}${RESET}"
-}
 
 # Snell 官方发布页（旧的 manual.nssurge.com/others/snell.html 已下线）
 SNELL_RELEASE_NOTES_URL="https://kb.nssurge.com/surge-knowledge-base/release-notes/snell"
@@ -189,9 +159,9 @@ SNELL_RELEASE_NOTES_URL_ZH="https://kb.nssurge.com/surge-knowledge-base/zh/relea
 # 抓取官方发布页内容
 fetch_snell_release_notes() {
     local notes
-    notes=$(curl -s --max-time 15 "$SNELL_RELEASE_NOTES_URL")
+    notes=$(curl -sL --max-time 15 "$SNELL_RELEASE_NOTES_URL")
     if [ -z "$notes" ]; then
-        notes=$(curl -s --max-time 15 "$SNELL_RELEASE_NOTES_URL_ZH")
+        notes=$(curl -sL --max-time 15 "$SNELL_RELEASE_NOTES_URL_ZH")
     fi
     echo "$notes"
 }
@@ -269,120 +239,54 @@ get_latest_snell_v6_version() {
     fi
 }
 
-# 说明：按通道取最新版本号用 resolve_latest_version_for_channel，
-# 生成下载地址用 snell_download_url_for（失败返回非 0，不会 exit 掉整个脚本），
-# 两者都在下方「多版本共存」段落里。
-
-# 读取已安装 v6 服务端使用的 mode（读不到时回落到默认值）
-get_snell_mode() {
-    local conf_file="${1:-${SNELL_CONF_DIR}/users/snell-main.conf}"
-    local mode=""
-    if [ -f "$conf_file" ]; then
-        mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-    fi
-    if [ -z "$mode" ]; then
-        mode="$SNELL_MODE"
-    fi
-    echo "$mode"
+# 解析指定通道的最新版本号（失败时回落到内置常量）
+resolve_latest_version_for_channel() {
+    case "$1" in
+        v6) get_latest_snell_v6_version ;;
+        v5) get_latest_snell_v5_version ;;
+        v4) get_latest_snell_v4_version ;;
+        *)  return 1 ;;
+    esac
 }
 
-# 生成 snell-server 配置文件
-# v6 使用 mode / dns-ip-preference；ipv6 参数在 v6 已废弃（false 等价 ipv4-only）
-write_snell_conf() {
-    local conf_file="$1"
-    local listen_addr="$2"
-    local port="$3"
-    local psk="$4"
-    local ipv6_enable="$5"
-    local dns="$6"
-    local version_choice="$7"
+# 生成指定通道 + 版本号的下载地址；不支持的架构返回非 0（不 exit，调用方可继续）
+snell_download_url_for() {
+    local version_choice="$1"
+    local resolved_version="$2"
+    local arch
+    arch=$(uname -m)
 
-    {
-        case "$version_choice" in
-            v4|v5|v6) echo "#${SNELL_VERSION_MARKER_KEY} = ${version_choice}" ;;
-        esac
-        echo "[snell-server]"
-        echo "listen = ${listen_addr}:${port}"
-        echo "psk = ${psk}"
-        if [ "$version_choice" = "v6" ]; then
-            echo "mode = ${SNELL_MODE}"
-            if [ -n "$SNELL_DNS_IP_PREFERENCE" ]; then
-                echo "dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}"
-            elif [ "$ipv6_enable" = "false" ]; then
-                echo "dns-ip-preference = ipv4-only"
-            else
-                echo "dns-ip-preference = default"
-            fi
-        else
-            echo "ipv6 = ${ipv6_enable}"
-        fi
-        echo "dns = ${dns}"
-    } > "$conf_file"
+    case "$version_choice" in
+        v4|v5|v6) ;;
+        *)
+            printf '%b\n' "${RED}不支持的 Snell 通道: ${version_choice}${RESET}" >&2
+            return 1
+            ;;
+    esac
 
-    # PSK 是共享密钥：仅属主可读写，避免本机其他用户读取
-    chmod 600 "$conf_file" 2>/dev/null || true
-    if getent passwd "${SNELL_SERVICE_USER}" >/dev/null 2>&1; then
-        chown "${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP}" "$conf_file" 2>/dev/null || true
-    fi
-}
-
-# 版本切换后同步配置文件参数：v6 用 mode / dns-ip-preference，v4/v5 用 ipv6
-migrate_snell_conf_for_version() {
-    local conf_file="$1"
-    local version_choice="$2"
-    [ -f "$conf_file" ] || return 0
-
-    local ipv6_enable="true"
-    if grep -Eq '^[[:space:]]*ipv6[[:space:]]*=[[:space:]]*false' "$conf_file" \
-        || grep -Eq '^[[:space:]]*dns-ip-preference[[:space:]]*=[[:space:]]*ipv4-only' "$conf_file"; then
-        ipv6_enable="false"
-    fi
-
-    # 沿用配置中已有的 v6 参数；仅当用户本次显式选择过才覆盖
-    local target_mode target_pref
-    target_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-    target_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-
-    if [ "$SNELL_V6_OPTIONS_SET" = "true" ]; then
-        target_mode="$SNELL_MODE"
-        target_pref="$SNELL_DNS_IP_PREFERENCE"
-    fi
-
-    [ -z "$target_mode" ] && target_mode="$SNELL_MODE"
-    if [ -z "$target_pref" ]; then
-        if [ "$ipv6_enable" = "false" ]; then
-            target_pref="ipv4-only"
-        else
-            target_pref="default"
-        fi
-    fi
-
-    local tmp_conf="${conf_file}.tmp"
-    {
-        grep -Ev '^[[:space:]]*(ipv6|mode|dns-ip-preference)[[:space:]]*=' "$conf_file"
-        if [ "$version_choice" = "v6" ]; then
-            echo "mode = ${target_mode}"
-            echo "dns-ip-preference = ${target_pref}"
-        else
-            echo "ipv6 = ${ipv6_enable}"
-        fi
-    } > "$tmp_conf" || {
-        rm -f "$tmp_conf"
-        echo -e "${RED}生成配置失败: ${conf_file}${RESET}" >&2
+    if [ "$version_choice" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
+        printf '%b\n' "${RED}Snell v6 暂不提供 armv7l 构建${RESET}" >&2
         return 1
-    }
+    fi
 
-    # 用 cat 回写保留原文件属主与权限（服务以 snell 用户身份读取）
-    cat "$tmp_conf" > "$conf_file" || {
-        rm -f "$tmp_conf"
-        echo -e "${RED}回写配置失败: ${conf_file}${RESET}" >&2
-        return 1
-    }
-    rm -f "$tmp_conf"
-
-    # 通道归属随之更新，后续都以标记为准
-    set_conf_snell_version "$conf_file" "$version_choice"
+    case "$arch" in
+        "x86_64"|"amd64")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-amd64.zip" ;;
+        "i386"|"i686")     echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-i386.zip" ;;
+        "aarch64"|"arm64") echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-aarch64.zip" ;;
+        "armv7l"|"armv7")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-armv7l.zip" ;;
+        *)
+            printf '%b\n' "${RED}不支持的架构: ${arch}${RESET}" >&2
+            return 1
+            ;;
+    esac
 }
+
+# ── lib/netinfo.sh ────────────────────────────────────────────────────────────
+# 本机公网地址与所在国家（生成客户端配置时用）。POSIX sh。
+
+# 本机公网 IPv4 / IPv6（取不到时为空）
+get_public_ipv4() { curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null; }
+get_public_ipv6() { curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org 2>/dev/null; }
 
 # 查询 IP 所属国家代码（多接口回退，避免单一接口限流返回错误信息）
 get_ip_country() {
@@ -418,29 +322,272 @@ get_ip_country() {
     return 1
 }
 
-# 生成 Surge 配置格式
-generate_surge_config() {
-    local ip_addr=$1
-    local port=$2
-    local psk=$3
-    local version=$4
-    local country=$5
-    local installed_version=$6
+# ── lib/firewall.sh ───────────────────────────────────────────────────────────
+# 开放 / 关闭端口：firewalld、ufw、iptables + ip6tables、nftables，系统在用哪个就配哪个，
+# 并持久化。所有脚本共用这一份（以前各脚本各有一份，CentOS 版才认 firewalld、
+# Docker 版只开 TCP、重复安装会叠加重复规则）。POSIX sh。
 
-    if [ "$installed_version" = "v6" ]; then
-        # v6 版本：v6 协议（已移除 QUIC 模式与 obfs），mode 必须与服务端一致
-        local mode
-        mode=$(get_snell_mode "$(snell_conf_for_port "$port")")
-        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 6, mode = ${mode}, reuse = true, tfo = true${RESET}"
-    elif [ "$installed_version" = "v5" ]; then
-        # v5 版本输出 v4 和 v5 两种配置
-        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
-        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
+# firewalld 正在运行
+_fw_firewalld_active() {
+    command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1
+}
+
+# ufw 已启用（-w：不把 inactive 当成 active）
+_fw_ufw_active() {
+    command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"
+}
+
+# both | tcp | udp → 协议列表
+_fw_protos() {
+    case "$1" in
+        tcp) echo "tcp" ;;
+        udp) echo "udp" ;;
+        *) echo "tcp udp" ;;
+    esac
+}
+
+# iptables 规则持久化：Debian 的 /etc/iptables、RHEL 的 iptables-services、Alpine 的 init 脚本
+_fw_iptables_save() {
+    if [ -x /etc/init.d/iptables ] && command -v rc-update >/dev/null 2>&1; then
+        /etc/init.d/iptables save >/dev/null 2>&1 || true
+        rc-update add iptables boot >/dev/null 2>&1 || true
+        if [ -x /etc/init.d/ip6tables ]; then
+            /etc/init.d/ip6tables save >/dev/null 2>&1 || true
+            rc-update add ip6tables boot >/dev/null 2>&1 || true
+        fi
+    elif [ -f /etc/sysconfig/iptables ]; then
+        iptables-save > /etc/sysconfig/iptables 2>/dev/null || true
+        [ -f /etc/sysconfig/ip6tables ] && ip6tables-save > /etc/sysconfig/ip6tables 2>/dev/null || true
     else
-        # v4 版本只输出 v4 配置
-        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        command -v ip6tables-save >/dev/null 2>&1 && ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
     fi
 }
+
+# iptables / ip6tables：没有同样的规则才插入
+_fw_iptables_open() {   # <port> <protos>
+    _fio_changed=false
+    for _fio_t in iptables ip6tables; do
+        command -v "$_fio_t" >/dev/null 2>&1 || continue
+        "$_fio_t" -L INPUT -n >/dev/null 2>&1 || continue   # 内核或容器里不可用
+        for _fio_p in $2; do
+            if ! "$_fio_t" -C INPUT -p "$_fio_p" --dport "$1" -j ACCEPT 2>/dev/null; then
+                "$_fio_t" -I INPUT -p "$_fio_p" --dport "$1" -j ACCEPT 2>/dev/null && _fio_changed=true
+            fi
+        done
+    done
+    if [ "$_fio_changed" = true ]; then
+        printf '%b\n' "${CYAN}在 iptables 中开放端口 $1${RESET}"
+        _fw_iptables_save
+    fi
+}
+
+_fw_iptables_close() {   # <port>
+    _fic_changed=false
+    for _fic_t in iptables ip6tables; do
+        command -v "$_fic_t" >/dev/null 2>&1 || continue
+        for _fic_p in tcp udp; do
+            while "$_fic_t" -C INPUT -p "$_fic_p" --dport "$1" -j ACCEPT 2>/dev/null; do
+                "$_fic_t" -D INPUT -p "$_fic_p" --dport "$1" -j ACCEPT 2>/dev/null || break
+                _fic_changed=true
+            done
+        done
+    done
+    [ "$_fic_changed" = true ] && _fw_iptables_save
+    return 0
+}
+
+# 保存 nftables 规则（有持久化配置文件时）
+save_nftables_rules() {
+    command -v nft >/dev/null 2>&1 || return 0
+    for _snr_f in /etc/nftables.conf /etc/sysconfig/nftables.conf /etc/nftables.nft; do
+        [ -f "$_snr_f" ] || continue
+        nft list ruleset > "$_snr_f" 2>/dev/null || true
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl enable nftables >/dev/null 2>&1 || true
+        elif command -v rc-update >/dev/null 2>&1; then
+            rc-update add nftables boot >/dev/null 2>&1 || true
+        fi
+        printf '%b\n' "${GREEN}nftables 规则已保存${RESET}"
+        return 0
+    done
+    return 0
+}
+
+# nftables 里 hook 在 input 上的 filter 链（"族 表 链" 每行一条）。
+# iptables-nft 自己的 ip/ip6 filter 表已由 iptables 处理，跳过，免得规则重复。
+_fw_nft_input_chains() {
+    nft -a list ruleset 2>/dev/null | awk -v skip_ipt="$1" '
+        $1 == "table" { family = $2; table = $3; gsub(/[{}]/, "", table) }
+        $1 == "chain" { chain = $2; gsub(/[{}]/, "", chain); in_chain = 1; next }
+        in_chain && /type filter/ && /hook input/ {
+            if (!(skip_ipt == "1" && (family == "ip" || family == "ip6") && table == "filter")) print family " " table " " chain
+        }
+        in_chain && /^[[:space:]]*}/ { in_chain = 0 }
+    '
+}
+
+# 在 nftables 现有的 input 链里放行端口（没有 nftables 防火墙时什么都不做）
+open_nftables_port() {   # <port> [both|tcp|udp]
+    command -v nft >/dev/null 2>&1 || return 0
+    _onp_skip=0
+    command -v iptables >/dev/null 2>&1 && _onp_skip=1
+    _onp_chains=$(_fw_nft_input_chains "$_onp_skip")
+    [ -n "$_onp_chains" ] || return 0
+    _onp_changed=false
+    _onp_protos=$(_fw_protos "${2:-both}")
+    while read -r _onp_family _onp_table _onp_chain; do
+        [ -n "$_onp_family" ] || continue
+        for _onp_p in $_onp_protos; do
+            if ! nft list chain "$_onp_family" "$_onp_table" "$_onp_chain" 2>/dev/null | grep -q "$_onp_p dport $1 .*accept"; then
+                nft insert rule "$_onp_family" "$_onp_table" "$_onp_chain" "$_onp_p" dport "$1" accept 2>/dev/null && _onp_changed=true
+            fi
+        done
+    done <<EOF
+$_onp_chains
+EOF
+    if [ "$_onp_changed" = true ]; then
+        printf '%b\n' "${CYAN}在 nftables 中开放端口 $1${RESET}"
+        save_nftables_rules
+    fi
+}
+
+# 删掉 nftables 里放行该端口的规则
+close_nftables_port() {   # <port>
+    command -v nft >/dev/null 2>&1 || return 0
+    _cnp_rules=$(nft -a list ruleset 2>/dev/null | awk -v port="$1" '
+        $1 == "table" { family = $2; table = $3; gsub(/[{}]/, "", table) }
+        $1 == "chain" { chain = $2; gsub(/[{}]/, "", chain) }
+        ($0 ~ "(tcp|udp) dport " port " .*accept") && /# handle/ { print family " " table " " chain " " $NF }
+    ')
+    [ -n "$_cnp_rules" ] || return 0
+    while read -r _cnp_family _cnp_table _cnp_chain _cnp_handle; do
+        [ -n "$_cnp_handle" ] || continue
+        nft delete rule "$_cnp_family" "$_cnp_table" "$_cnp_chain" handle "$_cnp_handle" 2>/dev/null || true
+    done <<EOF
+$_cnp_rules
+EOF
+    save_nftables_rules
+}
+
+# 开放端口：firewalld 在运行就只交给它；ufw 已启用就只交给它；否则配 iptables 与 nftables
+open_port() {   # <port> [both|tcp|udp]
+    _op_protos=$(_fw_protos "${2:-both}")
+    if _fw_firewalld_active; then
+        printf '%b\n' "${CYAN}在 firewalld 中开放端口 $1${RESET}"
+        for _op_p in $_op_protos; do
+            firewall-cmd --permanent --add-port="$1/${_op_p}" >/dev/null 2>&1 || true
+            firewall-cmd --add-port="$1/${_op_p}" >/dev/null 2>&1 || true
+        done
+        return 0
+    fi
+    # ufw 装了但没启用时也写进去：以后启用 ufw 时端口仍是开的
+    if command -v ufw >/dev/null 2>&1; then
+        printf '%b\n' "${CYAN}在 UFW 中开放端口 $1${RESET}"
+        for _op_p in $_op_protos; do
+            ufw allow "$1/${_op_p}" >/dev/null 2>&1 || true
+        done
+        _fw_ufw_active && return 0
+    fi
+    _fw_iptables_open "$1" "$_op_protos"
+    open_nftables_port "$1" "${2:-both}"
+    return 0
+}
+
+# 关闭端口：各个防火墙里放行它的规则都删掉
+close_port() {   # <port>
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        for _cp_p in tcp udp; do
+            firewall-cmd --permanent --remove-port="$1/${_cp_p}" >/dev/null 2>&1 || true
+            firewall-cmd --remove-port="$1/${_cp_p}" >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v ufw >/dev/null 2>&1; then
+        ufw delete allow "$1/tcp" >/dev/null 2>&1 || true
+        ufw delete allow "$1/udp" >/dev/null 2>&1 || true
+        ufw delete allow "$1" >/dev/null 2>&1 || true
+    fi
+    _fw_iptables_close "$1"
+    close_nftables_port "$1"
+    return 0
+}
+
+# 端口在当前防火墙里是否放行（测试与状态显示用）：firewalld / ufw / iptables / nftables 任一处放行即算
+port_allowed() {   # <port> <tcp|udp>
+    if _fw_firewalld_active; then
+        firewall-cmd --query-port="$1/$2" >/dev/null 2>&1
+        return
+    fi
+    if _fw_ufw_active; then
+        ufw status 2>/dev/null | grep -Eq "^$1(/$2)?[[:space:]]+ALLOW"
+        return
+    fi
+    if command -v iptables >/dev/null 2>&1 && iptables -C INPUT -p "$2" --dport "$1" -j ACCEPT 2>/dev/null; then
+        return 0
+    fi
+    command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q "$2 dport $1 .*accept"
+}
+
+# 端口是否有进程在监听（TCP 或 UDP）
+is_port_in_use() {   # <port>
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltn "( sport = :$1 )" 2>/dev/null | grep -q . && return 0
+        ss -H -lun "( sport = :$1 )" 2>/dev/null | grep -q . && return 0
+        return 1
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+        lsof -nP -iUDP:"$1" >/dev/null 2>&1
+        return
+    fi
+    return 1
+}
+
+# 显示占用指定端口的进程
+show_port_occupier() {   # <port>
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "( sport = :$1 )" 2>/dev/null | sed 's/^/  /'
+        ss -lunp "( sport = :$1 )" 2>/dev/null | sed 's/^/  /'
+        return
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | sed 's/^/  /'
+        lsof -nP -iUDP:"$1" 2>/dev/null | sed 's/^/  /'
+    fi
+}
+
+# ── lib/channels.sh ───────────────────────────────────────────────────────────
+# systemd 安装的布局与多版本共存（v4 / v5 / v6）。snell.sh、multi-user.sh、
+# shadowtls.sh 共用（bash）。
+#
+# 二进制布局：
+#   ${INSTALL_DIR}/snell-server-v4|v5|v6   各通道的实体文件，systemd unit 直接指向它
+#   ${INSTALL_DIR}/snell-server            软链，指向主用户所用通道（保留给旧的探测逻辑）
+#
+# 版本标记：
+#   每个用户配置首行写 "#version-choice = vX"。注释形式，snell-server 不会解析到，
+#   且随 .conf 一起被备份/还原，不需要额外的伴生文件。PSM 写的配置也带这个标记。
+
+# 系统路径
+INSTALL_DIR="/usr/local/bin"
+SYSTEMD_DIR="/etc/systemd/system"
+SNELL_CONF_DIR="/etc/snell"
+USERS_DIR="${SNELL_CONF_DIR}/users"
+SNELL_CONF_FILE="${USERS_DIR}/snell-main.conf"
+SYSTEMD_SERVICE_FILE="${SYSTEMD_DIR}/snell.service"
+SYSTEMD_SOCKET_FILE="${SYSTEMD_DIR}/snell.socket"
+SYSTEMD_NETNS_FILE="${SYSTEMD_DIR}/snell-netns.service"
+NETNS_SETUP_SCRIPT="${INSTALL_DIR}/snell-netns-setup.sh"
+
+# 旧的配置文件路径（用于兼容性检查）
+OLD_SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
+OLD_SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
+SNELL_SERVICE_USER="snell"
+SNELL_SERVICE_GROUP="snell"
+
+SNELL_VERSION_MARKER_KEY="version-choice"
+SNELL_ALL_VERSIONS="v4 v5 v6"
 
 # 检测当前安装的 Snell 版本
 detect_installed_snell_version() {
@@ -457,124 +604,6 @@ detect_installed_snell_version() {
         echo "unknown"
     fi
 }
-
-# === 新增：备份和还原配置函数 ===
-# 备份 Snell 配置（只保留最近 10 个备份，避免越积越多）
-backup_snell_config() {
-    local backup_dir="${SNELL_CONF_DIR}/backup_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp -a "${SNELL_CONF_DIR}/users"/*.conf "$backup_dir"/ 2>/dev/null
-    ls -dt "${SNELL_CONF_DIR}"/backup_* 2>/dev/null | tail -n +11 | xargs -r rm -rf
-    echo "$backup_dir"
-}
-
-# 恢复 Snell 配置
-restore_snell_config() {
-    local backup_dir="$1"
-    if [ -d "$backup_dir" ]; then
-        cp -a "$backup_dir"/*.conf "${SNELL_CONF_DIR}/users"/
-        echo -e "${GREEN}配置已从备份恢复。${RESET}"
-    else
-        echo -e "${RED}未找到备份目录，无法恢复配置。${RESET}"
-    fi
-}
-
-# 检查 bc 是否安装
-check_bc() {
-    if ! command -v bc &> /dev/null; then
-        echo -e "${YELLOW}未检测到 bc，正在安装...${RESET}"
-        # 根据系统类型安装 bc
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y bc
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y bc
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 bc。请手动安装 bc。${RESET}"
-            exit 1
-        fi
-    fi
-}
-
-# 检查 curl 是否安装
-check_curl() {
-    if ! command -v curl &> /dev/null; then
-        echo -e "${YELLOW}未检测到 curl，正在安装...${RESET}"
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y curl
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y curl
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 curl。请手动安装 curl。${RESET}"
-            exit 1
-        fi
-    fi
-}
-
-# 下载远程脚本并做完整性校验：传输失败即停、非空、bash 语法检查。
-# 注意：这只能保证传输完整性；仓库本身被篡改需要靠发布签名来防，
-# 建议后续为 release 附加 SHA256 / GPG 签名。
-fetch_verified_script() {
-    local url="$1"
-    local dest="$2"
-
-    if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 "$url" -o "$dest"; then
-        echo -e "${RED}下载失败: ${url}${RESET}" >&2
-        rm -f "$dest"
-        return 1
-    fi
-    if [ ! -s "$dest" ]; then
-        echo -e "${RED}下载的文件为空，已丢弃: ${url}${RESET}" >&2
-        rm -f "$dest"
-        return 1
-    fi
-    if ! bash -n "$dest" 2>/dev/null; then
-        echo -e "${RED}下载的脚本未通过语法检查，已丢弃: ${url}${RESET}" >&2
-        rm -f "$dest"
-        return 1
-    fi
-    return 0
-}
-
-# 定义系统路径
-INSTALL_DIR="/usr/local/bin"
-SYSTEMD_DIR="/etc/systemd/system"
-SNELL_CONF_DIR="/etc/snell"
-SNELL_CONF_FILE="${SNELL_CONF_DIR}/users/snell-main.conf"
-SYSTEMD_SERVICE_FILE="${SYSTEMD_DIR}/snell.service"
-SYSTEMD_SOCKET_FILE="${SYSTEMD_DIR}/snell.socket"
-SYSTEMD_NETNS_FILE="${SYSTEMD_DIR}/snell-netns.service"
-NETNS_SETUP_SCRIPT="${INSTALL_DIR}/snell-netns-setup.sh"
-
-# 出口控制（netns + socket activation）默认参数
-EGRESS_FEATURE_ENABLED="false"
-EGRESS_IFACE=""
-EGRESS_NS="snell-egress"
-EGRESS_HOST_IP=""
-EGRESS_NS_IP=""
-EGRESS_SUBNET=""
-EGRESS_GW=""
-
-# 旧的配置文件路径（用于兼容性检查）
-OLD_SNELL_CONF_FILE="${SNELL_CONF_DIR}/snell-server.conf"
-OLD_SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
-SNELL_SERVICE_USER="snell"
-SNELL_SERVICE_GROUP="snell"
-
-# =========================================
-# 多版本共存（v4 / v5 / v6）支持
-#
-# 二进制布局：
-#   ${INSTALL_DIR}/snell-server-v4|v5|v6   各通道的实体文件，systemd unit 直接指向它
-#   ${INSTALL_DIR}/snell-server            软链，指向主用户所用通道（保留给旧的探测逻辑）
-#
-# 版本标记：
-#   每个用户配置首行写 "#version-choice = vX"。注释形式，snell-server 不会解析到，
-#   且随 .conf 一起被备份/还原，不需要额外的伴生文件。
-# =========================================
-SNELL_VERSION_MARKER_KEY="version-choice"
-SNELL_ALL_VERSIONS="v4 v5 v6"
 
 # 版本号 -> 二进制路径
 snell_binary_for_version() {
@@ -677,6 +706,13 @@ set_conf_snell_version() {
     return 0
 }
 
+# 获取 Snell 端口
+get_snell_port() {
+    if [ -f "${SNELL_CONF_DIR}/users/snell-main.conf" ]; then
+        grep -E '^listen' "${SNELL_CONF_DIR}/users/snell-main.conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p'
+    fi
+}
+
 # 端口 -> 配置文件路径（主端口走主配置）
 snell_conf_for_port() {
     local port="$1"
@@ -746,48 +782,6 @@ update_snell_symlink() {
     ln -sfn "$target" "${INSTALL_DIR}/snell-server"
 }
 
-# 生成指定通道 + 版本号的下载地址；不支持的通道或架构返回非 0（不 exit，调用方可继续）
-snell_download_url_for() {
-    local version_choice="$1"
-    local resolved_version="$2"
-    local arch
-    arch=$(uname -m)
-
-    case "$version_choice" in
-        v4|v5|v6) ;;
-        *)
-            echo -e "${RED}不支持的 Snell 通道: ${version_choice}${RESET}" >&2
-            return 1
-            ;;
-    esac
-
-    if [ "$version_choice" = "v6" ] && { [ "$arch" = "armv7l" ] || [ "$arch" = "armv7" ]; }; then
-        echo -e "${RED}Snell v6 暂不提供 armv7l 构建${RESET}" >&2
-        return 1
-    fi
-
-    case "$arch" in
-        "x86_64"|"amd64")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-amd64.zip" ;;
-        "i386"|"i686")     echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-i386.zip" ;;
-        "aarch64"|"arm64") echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-aarch64.zip" ;;
-        "armv7l"|"armv7")  echo "https://dl.nssurge.com/snell/snell-server-${resolved_version}-linux-armv7l.zip" ;;
-        *)
-            echo -e "${RED}不支持的架构: ${arch}${RESET}" >&2
-            return 1
-            ;;
-    esac
-}
-
-# 解析指定通道的最新版本号（失败时回落到内置常量）
-resolve_latest_version_for_channel() {
-    case "$1" in
-        v6) get_latest_snell_v6_version ;;
-        v5) get_latest_snell_v5_version ;;
-        v4) get_latest_snell_v4_version ;;
-        *)  return 1 ;;
-    esac
-}
-
 # 下载指定通道的二进制到版本化路径。force=true 时即使已存在也重新下载。
 # 只往 stderr 打印进度，stdout 留给调用方使用。
 install_snell_binary_for_version() {
@@ -815,17 +809,14 @@ install_snell_binary_for_version() {
     echo -e "${CYAN}正在下载 Snell ${version} (${resolved})...${RESET}" >&2
     echo -e "${YELLOW}${url}${RESET}" >&2
 
+    # 下载与解压要用的命令，缺了先装（任何发行版）
+    ensure_cmds curl unzip >&2 || return 1
+
     local tmp_dir
     tmp_dir=$(mktemp -d) || return 1
 
     local downloaded=false
-    if command -v wget >/dev/null 2>&1; then
-        wget --tries=3 --timeout=15 -O "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
-    elif command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 --connect-timeout 10 --max-time 120 -o "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
-    else
-        echo -e "${RED}系统缺少 wget 与 curl，无法下载${RESET}" >&2
-    fi
+    curl -fL --retry 3 --connect-timeout 10 --max-time 120 -o "${tmp_dir}/snell-server.zip" "$url" && downloaded=true
 
     if [ "$downloaded" != "true" ]; then
         echo -e "${RED}下载 Snell ${version} 失败: ${url}${RESET}" >&2
@@ -1034,6 +1025,1125 @@ migrate_legacy_main_config_if_needed() {
 
     return 1
 }
+
+# 获取所有 Snell 用户配置
+get_all_snell_users() {
+    # 检查用户配置目录是否存在
+    if [ ! -d "${SNELL_CONF_DIR}/users" ]; then
+        return 1
+    fi
+    
+    # 首先获取主用户配置
+    local main_port=""
+    local main_psk=""
+    if [ -f "${SNELL_CONF_DIR}/users/snell-main.conf" ]; then
+        main_port=$(grep -E '^listen' "${SNELL_CONF_DIR}/users/snell-main.conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+        main_psk=$(grep -E '^psk' "${SNELL_CONF_DIR}/users/snell-main.conf" | awk -F'=' '{print $2}' | tr -d ' ')
+        if [ ! -z "$main_port" ] && [ ! -z "$main_psk" ]; then
+            echo "${main_port}|${main_psk}"
+        fi
+    fi
+    
+    # 获取其他用户配置
+    for user_conf in "${SNELL_CONF_DIR}/users"/snell-*.conf; do
+        if [ -f "$user_conf" ] && [[ "$user_conf" != *"snell-main.conf" ]]; then
+            local port=$(grep -E '^listen' "$user_conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
+            local psk=$(grep -E '^psk' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
+            if [ ! -z "$port" ] && [ ! -z "$psk" ]; then
+                echo "${port}|${psk}"
+            fi
+        fi
+    done
+}
+
+# =========================================
+# Snell 版本管理：按通道更新 / 追加通道 / 切换用户通道
+# =========================================
+# 读取某通道二进制自报的具体版本号（如 v5.0.1）
+get_channel_binary_version() {
+    local version="$1"
+    local binary
+    binary=$(snell_binary_for_version "$version")
+    [ -x "$binary" ] || return 1
+
+    local detail
+    detail=$("$binary" --v 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9]*' | head -n 1)
+    if [ -z "$detail" ]; then
+        # 早期 v4 的 --v 不打印版本号，用内置常量兜底
+        case "$version" in
+            v4) detail="$SNELL_V4_FALLBACK" ;;
+            v5) detail="$SNELL_V5_FALLBACK" ;;
+            v6) detail="$SNELL_V6_FALLBACK" ;;
+        esac
+    fi
+    echo "$detail"
+}
+
+# 重启服务并确认真的起来了；起不来打印日志尾部，不让用户自己翻
+restart_and_verify_service() {
+    local service="$1"
+    local waited=0
+
+    if ! systemctl restart "$service" 2>/dev/null; then
+        echo -e "${RED}systemctl restart ${service} 返回失败${RESET}"
+        journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
+        return 1
+    fi
+
+    while [ "$waited" -lt 10 ]; do
+        if systemctl is-active --quiet "$service"; then
+            return 0
+        fi
+        # socket 激活场景下主服务按需拉起，socket 活着即视为正常
+        if [ "$service" = "snell" ] && systemctl is-active --quiet snell.socket; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo -e "${RED}${service} 在 ${waited} 秒内未进入 active 状态${RESET}"
+    journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
+    return 1
+}
+
+# 切换/回滚用的备份统一放在 ${SNELL_CONF_DIR}/backup 下。
+# 不能放进 users/ —— 多处循环是按 users/* 遍历的，备份文件会被当成真实用户。
+snell_backup_path() {
+    local src="$1"
+    local stamp="$2"
+    local dir="${SNELL_CONF_DIR}/backup"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    echo "${dir}/$(basename "$src").${stamp}"
+}
+
+# === 新增：备份和还原配置函数 ===
+# 备份 Snell 配置（只保留最近 10 个备份，避免越积越多）
+backup_snell_config() {
+    local backup_dir="${SNELL_CONF_DIR}/backup_$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+    cp -a "${SNELL_CONF_DIR}/users"/*.conf "$backup_dir"/ 2>/dev/null
+    ls -dt "${SNELL_CONF_DIR}"/backup_* 2>/dev/null | tail -n +11 | xargs -r rm -rf
+    echo "$backup_dir"
+}
+
+
+# ── lib/conf.sh ───────────────────────────────────────────────────────────────
+# 用户配置：选版本与 v6 参数、写入与迁移配置、端口 / DNS / IPv6 输入、Surge 配置行。
+# snell.sh、multi-user.sh 共用（bash）。
+
+# 全局变量：选择的 Snell 版本
+SNELL_VERSION_CHOICE=""
+
+# Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
+SNELL_MODE="default"
+
+# Snell v6 DNS 解析地址族偏好：default / prefer-ipv4 / prefer-ipv6 / ipv4-only / ipv6-only
+# 留空表示跟随 IPv6 开关自动推导
+SNELL_DNS_IP_PREFERENCE=""
+
+# 标记用户是否在本次操作中显式选择过 v6 参数（影响升级时是否覆盖已有配置）
+SNELL_V6_OPTIONS_SET="false"
+
+IPV6_ENABLE="true"
+
+# === 新增：版本选择函数 ===
+# 选择 Snell 版本
+select_snell_version() {
+    echo -e "${CYAN}请选择要安装的 Snell 版本：${RESET}"
+    echo -e "${GREEN}1.${RESET} Snell v4"
+    echo -e "${GREEN}2.${RESET} Snell v5"
+    echo -e "${GREEN}3.${RESET} Snell v6 (RC)"
+
+    while true; do
+        read -rp "请输入选项 [1-3]: " version_choice
+        case "$version_choice" in
+            1)
+                SNELL_VERSION_CHOICE="v4"
+                echo -e "${GREEN}已选择 Snell v4${RESET}"
+                break
+                ;;
+            2)
+                SNELL_VERSION_CHOICE="v5"
+                echo -e "${GREEN}已选择 Snell v5${RESET}"
+                break
+                ;;
+            3)
+                SNELL_VERSION_CHOICE="v6"
+                echo -e "${GREEN}已选择 Snell v6 (RC)${RESET}"
+                echo -e "${YELLOW}注意：v6 仍为预发布版本，协议可能存在不兼容更新${RESET}"
+                echo -e "${YELLOW}v6 已移除 QUIC 代理模式与 obfs，且不提供 armv7l 构建${RESET}"
+                echo -e "${YELLOW}加密模式：mode = ${SNELL_MODE}（客户端需配置相同的 mode）${RESET}"
+                break
+                ;;
+            *)
+                echo -e "${RED}请输入正确的选项 [1-3]${RESET}"
+                ;;
+        esac
+    done
+}
+
+# === Snell v6 参数选择 ===
+# 加密模式 (mode)：客户端必须配置完全相同的值，否则无法连接
+select_snell_v6_mode() {
+    local current="$1"
+    local default_choice="1"
+    case "$current" in
+        unshaped)   default_choice="2" ;;
+        unsafe-raw) default_choice="3" ;;
+    esac
+
+    echo -e "\n${CYAN}=== Snell v6 加密模式 (mode) ===${RESET}"
+    echo -e "${YELLOW}客户端必须配置与服务端完全相同的 mode，不一致将无法连接${RESET}\n"
+    echo -e "${GREEN}1.${RESET} default     流量混淆 + AES 加密"
+    echo -e "   特征伪装最完整，抗识别与抗封锁能力最强"
+    echo -e "   ${CYAN}建议：绝大多数用户、线路存在干扰或 QoS 时选此项${RESET}"
+    echo -e "${GREEN}2.${RESET} unshaped    关闭混淆，仅 AES 加密"
+    echo -e "   吞吐相比 default 提升约 10%，但流量特征更明显"
+    echo -e "   ${CYAN}建议：线路干净、以速度为先，或已叠加 ShadowTLS 等外层伪装时选此项${RESET}"
+    echo -e "${GREEN}3.${RESET} unsafe-raw  明文转发，不加密不混淆"
+    echo -e "   ${RED}数据可被完整还原，公网环境切勿使用${RESET}"
+    echo -e "   ${CYAN}建议：仅用于内网或完全可信链路的性能测试${RESET}\n"
+
+    while true; do
+        read -rp "请选择加密模式 [1-3]（回车使用 ${default_choice}）: " mode_choice
+        [ -z "$mode_choice" ] && mode_choice="$default_choice"
+        case "$mode_choice" in
+            1) SNELL_MODE="default";    break ;;
+            2) SNELL_MODE="unshaped";   break ;;
+            3)
+                SNELL_MODE="unsafe-raw"
+                echo -e "${RED}警告：unsafe-raw 为明文传输，请确认该链路完全可信！${RESET}"
+                read -rp "确认使用 unsafe-raw? [y/N]: " raw_confirm
+                case "$raw_confirm" in
+                    [yY]|[yY][eE][sS]) break ;;
+                    *) echo -e "${CYAN}已取消，请重新选择${RESET}" ;;
+                esac
+                ;;
+            *) echo -e "${RED}请输入正确的选项 [1-3]${RESET}" ;;
+        esac
+    done
+    echo -e "${GREEN}已选择 mode = ${SNELL_MODE}${RESET}"
+}
+
+# DNS 解析地址族偏好 (dns-ip-preference)：影响服务端解析目标域名后用哪种地址出站
+select_snell_v6_dns_preference() {
+    local current="$1"
+    local default_choice="1"
+
+    # 未指定时按 IPv6 开关推导默认值
+    if [ -z "$current" ]; then
+        [ "$IPV6_ENABLE" = "false" ] && default_choice="4"
+    else
+        case "$current" in
+            default)     default_choice="1" ;;
+            prefer-ipv4) default_choice="2" ;;
+            prefer-ipv6) default_choice="3" ;;
+            ipv4-only)   default_choice="4" ;;
+            ipv6-only)   default_choice="5" ;;
+        esac
+    fi
+
+    echo -e "\n${CYAN}=== Snell v6 DNS 解析偏好 (dns-ip-preference) ===${RESET}"
+    echo -e "${YELLOW}控制服务端解析目标域名后优先使用哪种地址族出站，与监听地址无关${RESET}\n"
+    echo -e "${GREEN}1.${RESET} default       跟随系统默认解析行为"
+    echo -e "   ${CYAN}建议：不确定时选此项，适配绝大多数 VPS${RESET}"
+    echo -e "${GREEN}2.${RESET} prefer-ipv4   双栈可用时优先 IPv4，失败再试 IPv6"
+    echo -e "   ${CYAN}建议：IPv6 出口质量差、或目标站点 IPv6 解锁较差时${RESET}"
+    echo -e "${GREEN}3.${RESET} prefer-ipv6   双栈可用时优先 IPv6，失败再试 IPv4"
+    echo -e "   ${CYAN}建议：IPv6 线路更优，或需要 IPv6 解锁流媒体时${RESET}"
+    echo -e "${GREEN}4.${RESET} ipv4-only     只使用 IPv4 解析结果"
+    echo -e "   ${CYAN}建议：VPS 无 IPv6 出口，避免连接 IPv6 目标时超时等待${RESET}"
+    echo -e "${GREEN}5.${RESET} ipv6-only     只使用 IPv6 解析结果"
+    echo -e "   ${CYAN}建议：IPv6 Only 的 VPS（无 IPv4 出口）${RESET}\n"
+
+    while true; do
+        read -rp "请选择 DNS 解析偏好 [1-5]（回车使用 ${default_choice}）: " dns_pref_choice
+        [ -z "$dns_pref_choice" ] && dns_pref_choice="$default_choice"
+        case "$dns_pref_choice" in
+            1) SNELL_DNS_IP_PREFERENCE="default";     break ;;
+            2) SNELL_DNS_IP_PREFERENCE="prefer-ipv4"; break ;;
+            3) SNELL_DNS_IP_PREFERENCE="prefer-ipv6"; break ;;
+            4) SNELL_DNS_IP_PREFERENCE="ipv4-only";   break ;;
+            5) SNELL_DNS_IP_PREFERENCE="ipv6-only";   break ;;
+            *) echo -e "${RED}请输入正确的选项 [1-5]${RESET}" ;;
+        esac
+    done
+    echo -e "${GREEN}已选择 dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}${RESET}"
+}
+
+# 统一入口：安装 v6 或升级到 v6 时调用，可传入现有配置文件以沿用当前取值
+configure_snell_v6_options() {
+    local conf_file="$1"
+    local current_mode="" current_pref=""
+
+    if [ -n "$conf_file" ] && [ -f "$conf_file" ]; then
+        current_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+        current_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+        if [ -n "$current_mode" ] || [ -n "$current_pref" ]; then
+            echo -e "${CYAN}检测到当前配置：mode = ${current_mode:-未设置}，dns-ip-preference = ${current_pref:-未设置}${RESET}"
+        fi
+    fi
+
+    select_snell_v6_mode "$current_mode"
+    select_snell_v6_dns_preference "$current_pref"
+    SNELL_V6_OPTIONS_SET="true"
+
+    echo -e "\n${CYAN}=== v6 参数确认 ===${RESET}"
+    echo -e "${GREEN}服务端 mode              : ${SNELL_MODE}${RESET}"
+    echo -e "${GREEN}服务端 dns-ip-preference : ${SNELL_DNS_IP_PREFERENCE}${RESET}"
+    echo -e "${YELLOW}客户端对应配置：version = 6, mode = ${SNELL_MODE}${RESET}"
+}
+
+# 读取已安装 v6 服务端使用的 mode（读不到时回落到默认值）
+get_snell_mode() {
+    local conf_file="${1:-${SNELL_CONF_DIR}/users/snell-main.conf}"
+    local mode=""
+    if [ -f "$conf_file" ]; then
+        mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+    fi
+    if [ -z "$mode" ]; then
+        mode="$SNELL_MODE"
+    fi
+    echo "$mode"
+}
+
+# 生成 snell-server 配置文件
+# v6 使用 mode / dns-ip-preference；ipv6 参数在 v6 已废弃（false 等价 ipv4-only）
+write_snell_conf() {
+    local conf_file="$1"
+    local listen_addr="$2"
+    local port="$3"
+    local psk="$4"
+    local ipv6_enable="$5"
+    local dns="$6"
+    local version_choice="$7"
+
+    {
+        case "$version_choice" in
+            v4|v5|v6) echo "#${SNELL_VERSION_MARKER_KEY} = ${version_choice}" ;;
+        esac
+        echo "[snell-server]"
+        echo "listen = ${listen_addr}:${port}"
+        echo "psk = ${psk}"
+        if [ "$version_choice" = "v6" ]; then
+            echo "mode = ${SNELL_MODE}"
+            if [ -n "$SNELL_DNS_IP_PREFERENCE" ]; then
+                echo "dns-ip-preference = ${SNELL_DNS_IP_PREFERENCE}"
+            elif [ "$ipv6_enable" = "false" ]; then
+                echo "dns-ip-preference = ipv4-only"
+            else
+                echo "dns-ip-preference = default"
+            fi
+        else
+            echo "ipv6 = ${ipv6_enable}"
+        fi
+        echo "dns = ${dns}"
+    } > "$conf_file"
+
+    # PSK 是共享密钥：仅属主可读写，避免本机其他用户读取
+    chmod 600 "$conf_file" 2>/dev/null || true
+    if getent passwd "${SNELL_SERVICE_USER}" >/dev/null 2>&1; then
+        chown "${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP}" "$conf_file" 2>/dev/null || true
+    fi
+}
+
+# 版本切换后同步配置文件参数：v6 用 mode / dns-ip-preference，v4/v5 用 ipv6
+migrate_snell_conf_for_version() {
+    local conf_file="$1"
+    local version_choice="$2"
+    [ -f "$conf_file" ] || return 0
+
+    local ipv6_enable="true"
+    if grep -Eq '^[[:space:]]*ipv6[[:space:]]*=[[:space:]]*false' "$conf_file" \
+        || grep -Eq '^[[:space:]]*dns-ip-preference[[:space:]]*=[[:space:]]*ipv4-only' "$conf_file"; then
+        ipv6_enable="false"
+    fi
+
+    # 沿用配置中已有的 v6 参数；仅当用户本次显式选择过才覆盖
+    local target_mode target_pref
+    target_mode=$(grep -E '^[[:space:]]*mode[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+    target_pref=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$conf_file" | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+
+    if [ "$SNELL_V6_OPTIONS_SET" = "true" ]; then
+        target_mode="$SNELL_MODE"
+        target_pref="$SNELL_DNS_IP_PREFERENCE"
+    fi
+
+    [ -z "$target_mode" ] && target_mode="$SNELL_MODE"
+    if [ -z "$target_pref" ]; then
+        if [ "$ipv6_enable" = "false" ]; then
+            target_pref="ipv4-only"
+        else
+            target_pref="default"
+        fi
+    fi
+
+    local tmp_conf="${conf_file}.tmp"
+    {
+        grep -Ev '^[[:space:]]*(ipv6|mode|dns-ip-preference)[[:space:]]*=' "$conf_file"
+        if [ "$version_choice" = "v6" ]; then
+            echo "mode = ${target_mode}"
+            echo "dns-ip-preference = ${target_pref}"
+        else
+            echo "ipv6 = ${ipv6_enable}"
+        fi
+    } > "$tmp_conf" || {
+        rm -f "$tmp_conf"
+        echo -e "${RED}生成配置失败: ${conf_file}${RESET}" >&2
+        return 1
+    }
+
+    # 用 cat 回写保留原文件属主与权限（服务以 snell 用户身份读取）
+    cat "$tmp_conf" > "$conf_file" || {
+        rm -f "$tmp_conf"
+        echo -e "${RED}回写配置失败: ${conf_file}${RESET}" >&2
+        return 1
+    }
+    rm -f "$tmp_conf"
+
+    # 通道归属随之更新，后续都以标记为准
+    set_conf_snell_version "$conf_file" "$version_choice"
+}
+
+# 生成 Surge 配置格式
+generate_surge_config() {
+    local ip_addr=$1
+    local port=$2
+    local psk=$3
+    local version=$4
+    local country=$5
+    local installed_version=$6
+
+    if [ "$installed_version" = "v6" ]; then
+        # v6 版本：v6 协议（已移除 QUIC 模式与 obfs），mode 必须与服务端一致
+        local mode
+        mode=$(get_snell_mode "$(snell_conf_for_port "$port")")
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 6, mode = ${mode}, reuse = true, tfo = true${RESET}"
+    elif [ "$installed_version" = "v5" ]; then
+        # v5 版本输出 v4 和 v5 两种配置
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 5, reuse = true, tfo = true${RESET}"
+    else
+        # v4 版本只输出 v4 配置
+        echo -e "${GREEN}${country} = snell, ${ip_addr}, ${port}, psk = ${psk}, version = 4, reuse = true, tfo = true${RESET}"
+    fi
+}
+
+# 比较版本号（复用 snell_version_sort_key，正确处理 b4 / rc / rc2 / 正式版）
+version_greater_equal() {
+    local key1 key2
+    key1=$(snell_version_sort_key "$1")
+    key2=$(snell_version_sort_key "$2")
+
+    [[ "$key1" > "$key2" || "$key1" == "$key2" ]]
+}
+
+# 用户输入端口号，范围 1-65535
+get_user_port() {
+    while true; do
+        read -rp "请输入要使用的端口号 (1-65535): " PORT
+        if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+            if is_port_in_use "$PORT"; then
+                echo -e "${YELLOW}警告：端口 ${PORT} 当前已被占用${RESET}"
+                show_port_occupier "$PORT"
+                read -rp "仍要使用该端口吗? [y/N]: " port_confirm
+                case "$port_confirm" in
+                    [yY]|[yY][eE][sS]) ;;
+                    *)
+                        echo -e "${CYAN}请重新选择端口${RESET}"
+                        continue
+                        ;;
+                esac
+            fi
+            echo -e "${GREEN}已选择端口: $PORT${RESET}"
+            break
+        else
+            echo -e "${RED}无效端口号，请输入 1 到 65535 之间的数字。${RESET}"
+        fi
+    done
+}
+
+# 获取系统DNS
+get_system_dns() {
+    # 尝试从resolv.conf获取系统DNS
+    if [ -f "/etc/resolv.conf" ]; then
+        system_dns=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
+        if [ ! -z "$system_dns" ]; then
+            echo "$system_dns"
+            return 0
+        fi
+    fi
+    
+    # 如果无法从resolv.conf获取，尝试使用公共DNS
+    echo "1.1.1.1,8.8.8.8"
+}
+
+# 获取用户输入的 DNS 服务器
+# 校验单个 DNS 主机：IPv4 / IPv6 / 域名
+validate_dns_host() {
+    local host="$1"
+    # IPv4：四段数字，每段 0-255
+    if [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        local seg old_ifs="$IFS"
+        IFS='.'
+        for seg in $host; do
+            if [ "$seg" -gt 255 ] 2>/dev/null; then
+                IFS="$old_ifs"
+                return 1
+            fi
+        done
+        IFS="$old_ifs"
+        return 0
+    fi
+    # IPv6：含冒号的十六进制组（宽松校验，snell 侧会再解析）
+    if [[ "$host" == *:* ]] && [[ "$host" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        return 0
+    fi
+    # 域名：字母数字点横线，不以点/横线开头结尾
+    if [[ "$host" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# 校验 DNS 输入：允许英文逗号分隔的多个地址
+validate_dns_input() {
+    local dns_input="$1" item
+    dns_input="${dns_input//[[:space:]]/}"
+    [ -n "$dns_input" ] || return 1
+    local old_ifs="$IFS"
+    IFS=','
+    for item in $dns_input; do
+        if ! validate_dns_host "$item"; then
+            IFS="$old_ifs"
+            return 1
+        fi
+    done
+    IFS="$old_ifs"
+    return 0
+}
+
+# 获取用户输入的 DNS 服务器（校验 IPv4/IPv6/域名，非法输入要求重填）
+get_dns() {
+    while true; do
+        read -rp "请输入 DNS 服务器地址 (直接回车使用系统DNS): " custom_dns
+        if [ -z "$custom_dns" ]; then
+            DNS=$(get_system_dns)
+            echo -e "${GREEN}使用系统 DNS 服务器: $DNS${RESET}"
+            return 0
+        fi
+        if validate_dns_input "$custom_dns"; then
+            DNS="${custom_dns//[[:space:]]/}"
+            echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
+            return 0
+        fi
+        echo -e "${RED}DNS 地址格式无效，请输入 IPv4/IPv6 地址或域名（多个请用英文逗号分隔）${RESET}"
+    done
+}
+
+# 是否启用 IPv6
+get_ipv6_choice() {
+    IPV6_ENABLE="true"
+    LISTEN_ADDR="::0"
+    read -rp "是否启用 IPv6? [Y/n]: " ipv6_choice
+    case "$ipv6_choice" in
+        [nN]|[nN][oO])
+            IPV6_ENABLE="false"
+            LISTEN_ADDR="0.0.0.0"
+            echo -e "${GREEN}已关闭 IPv6，仅监听 IPv4${RESET}"
+            ;;
+        *)
+            echo -e "${GREEN}已启用 IPv6${RESET}"
+            ;;
+    esac
+}
+
+# ── lib/routing.sh ────────────────────────────────────────────────────────────
+# 规则分流：Snell 服务端照旧用官方 snell-server，它连出去的流量按规则集决定走向——
+# 直连、拒绝，或者交给另一个出口（SOCKS5 / HTTP / Shadowsocks / WireGuard，比如家宽或 WARP）。
+#
+# 做法：nftables 只拦 snell 用户（所有 Snell 服务都以它运行）新发起的连接——TCP 重定向、
+# UDP 用 TPROXY——交给本机一个 sing-box（官方版本，固定版本号），sing-box 识别出域名
+# （TLS SNI / HTTP Host / QUIC）后按规则选出口。回给客户端的流量、sing-box 自己的流量、
+# DNS 查询都不经过它。sing-box 停了（或崩了）拦截规则随之撤掉，Snell 回到直连，不会断网。
+# 出口控制（netns）模式下 Snell 的流量不在本机发起，两者只能二选一。（bash）
+
+ROUTER_DIR="/etc/snell-router"                 # 状态与生成的配置（不放 /etc/snell：那里整个属于 snell 用户）
+ROUTER_STATE="${ROUTER_DIR}/state.json"
+ROUTER_CONFIG="${ROUTER_DIR}/config.json"
+ROUTER_BIN="${INSTALL_DIR}/snell-router"       # sing-box，单独一份，不影响机器上别的 sing-box（比如 PSM 的）
+ROUTER_NET="${INSTALL_DIR}/snell-router-net"   # 拦截规则的 up / down
+ROUTER_UNIT="${SYSTEMD_DIR}/snell-router.service"
+ROUTER_DROPIN_NAME="snell-router.conf"         # 让以 root 运行的 Snell 服务（如 PSM 装的）改用 snell 用户
+ROUTER_TCP_PORT=17391
+ROUTER_UDP_PORT=17392
+ROUTER_MARK=0x736e                             # "sn"
+ROUTER_TABLE=7391
+# 测试过的 sing-box 版本（它的配置格式在大版本之间会变，所以不追最新；可用环境变量换）
+ROUTER_SINGBOX_VERSION="${SNELL_ROUTER_SINGBOX_VERSION:-1.14.2}"
+GEOSITE_URL="https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set"
+GEOIP_URL="https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
+
+router_installed() { [ -f "$ROUTER_UNIT" ]; }
+router_active() { systemctl is-active --quiet snell-router 2>/dev/null; }
+
+# 状态：{udp, rules: [sing-box 规则 + _label], outbounds: [...], endpoints: [...], rule_sets: {tag: url}}
+router_state() {
+    if [ -s "$ROUTER_STATE" ]; then cat "$ROUTER_STATE"
+    else echo '{"udp": true, "rules": [], "outbounds": [], "endpoints": [], "rule_sets": {}}'; fi
+}
+router_save_state() {   # <json>
+    mkdir -p "$ROUTER_DIR" && chmod 700 "$ROUTER_DIR"
+    printf '%s\n' "$1" | jq '.' > "${ROUTER_STATE}.tmp" && mv "${ROUTER_STATE}.tmp" "$ROUTER_STATE"
+}
+
+# 规则集的标签 → 下载地址（geosite-* / geoip-* 用 SagerNet 的，其他从状态里查）
+router_rule_set_url() {   # <tag>
+    case "$1" in
+        geosite-*) echo "${GEOSITE_URL}/$1.srs" ;;
+        geoip-*)   echo "${GEOIP_URL}/$1.srs" ;;
+        *)         router_state | jq -r --arg t "$1" '.rule_sets[$t] // empty' ;;
+    esac
+}
+
+# 一条规则的说明：匹配什么 → 去哪
+router_rule_text() {   # <规则 JSON>
+    printf '%s' "$1" | jq -r '
+        (._label // ([.rule_set // [], .domain_suffix // [], .ip_cidr // []] | add | join(", "))) as $what
+        | (if .action == "reject" then "拒绝" elif .outbound == "direct" then "直连" else "出口 " + .outbound end) as $to
+        | "\($what) → \($to)"'
+}
+
+# 生成 sing-box 配置：先写临时文件让 sing-box 检查，通过了才替换
+router_write_config() {
+    local state tags tag url rule_sets tmp
+    state=$(router_state)
+    tags=$(printf '%s' "$state" | jq -r '[.rules[].rule_set // [] | .[]] | unique | .[]')
+    rule_sets='[]'
+    for tag in $tags; do
+        url=$(router_rule_set_url "$tag")
+        [ -n "$url" ] || { echo -e "${RED}规则集 ${tag} 没有下载地址${RESET}"; return 1; }
+        rule_sets=$(printf '%s' "$rule_sets" | jq --arg t "$tag" --arg u "$url" \
+            '. + [{type: "remote", tag: $t, format: "binary", url: $u, download_detour: "direct", update_interval: "1d"}]')
+    done
+    tmp="${ROUTER_CONFIG}.tmp"
+    # 关了 IPv6 的机器上监听 :: 会失败
+    local listen="::"
+    [ -s /proc/net/if_inet6 ] || listen="0.0.0.0"
+    printf '%s' "$state" | jq --argjson rs "$rule_sets" --argjson tp "$ROUTER_TCP_PORT" --argjson up "$ROUTER_UDP_PORT" --arg cache "${ROUTER_DIR}/cache.db" --arg l "$listen" '
+        {
+          log: {level: "warn", timestamp: true},
+          dns: {servers: [{type: "local", tag: "local"}]},
+          inbounds: ([{type: "redirect", tag: "snell-tcp", listen: $l, listen_port: $tp}]
+                     + (if .udp then [{type: "tproxy", tag: "snell-udp", listen: $l, listen_port: $up, network: "udp"}] else [] end)),
+          outbounds: ([{type: "direct", tag: "direct"}] + .outbounds),
+          route: {
+            default_domain_resolver: "local",
+            rules: ([{action: "sniff"}] + [.rules[] | with_entries(select(.key | startswith("_") | not))]),
+            rule_set: $rs,
+            final: "direct"
+          },
+          experimental: {cache_file: {enabled: true, path: $cache}}
+        }
+        + (if (.endpoints | length) > 0 then {endpoints: .endpoints} else {} end)' > "$tmp" || return 1
+    if ! "$ROUTER_BIN" check -c "$tmp" 2>"${tmp}.err"; then
+        echo -e "${RED}sing-box 不接受生成的配置：${RESET}"
+        sed 's/^/   /' "${tmp}.err"
+        rm -f "$tmp" "${tmp}.err"
+        return 1
+    fi
+    rm -f "${tmp}.err"
+    chmod 600 "$tmp"
+    mv "$tmp" "$ROUTER_CONFIG"
+}
+
+# 下载固定版本的 sing-box（官方发布）
+router_install_singbox() {
+    local arch tmp url
+    if [ -x "$ROUTER_BIN" ] && "$ROUTER_BIN" version 2>/dev/null | grep -q "version ${ROUTER_SINGBOX_VERSION}\$"; then
+        return 0
+    fi
+    case "$(uname -m)" in
+        x86_64|amd64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        armv7l|armv7) arch="armv7" ;;
+        i386|i686) arch="386" ;;
+        *) echo -e "${RED}不支持的架构：$(uname -m)${RESET}"; return 1 ;;
+    esac
+    ensure_cmds curl tar || return 1
+    url="https://github.com/SagerNet/sing-box/releases/download/v${ROUTER_SINGBOX_VERSION}/sing-box-${ROUTER_SINGBOX_VERSION}-linux-${arch}.tar.gz"
+    echo -e "${CYAN}正在下载 sing-box ${ROUTER_SINGBOX_VERSION}...${RESET}"
+    tmp=$(mktemp -d) || return 1
+    if ! curl -fL --retry 2 -o "${tmp}/sb.tar.gz" "$url" || ! tar -xzf "${tmp}/sb.tar.gz" -C "$tmp"; then
+        echo -e "${RED}下载 sing-box 失败：${url}${RESET}"
+        rm -rf "$tmp"
+        return 1
+    fi
+    install -m 755 "${tmp}/sing-box-${ROUTER_SINGBOX_VERSION}-linux-${arch}/sing-box" "$ROUTER_BIN"
+    rm -rf "$tmp"
+    "$ROUTER_BIN" version | head -1
+}
+
+# 拦截规则的 up / down 脚本（服务起停时由 systemd 调用）
+router_write_net_script() {
+    local udp
+    udp=$(router_state | jq -r '.udp')
+    cat > "$ROUTER_NET" <<EOF
+#!/bin/bash
+# 由 snell.sh 生成：把 snell 用户新发起的连接交给 snell-router（sing-box）。
+# up 时先等 sing-box 监听再接管；down 撤掉一切，Snell 回到直连。
+SNELL_UID=\$(id -u ${SNELL_SERVICE_USER} 2>/dev/null) || { echo "没有 ${SNELL_SERVICE_USER} 用户" >&2; exit 1; }
+TCP_PORT=${ROUTER_TCP_PORT}; UDP_PORT=${ROUTER_UDP_PORT}; MARK=${ROUTER_MARK}; TABLE=${ROUTER_TABLE}; UDP=${udp}
+
+down() {
+    nft delete table inet snell_router 2>/dev/null
+    ip rule del fwmark \$MARK lookup \$TABLE pref \$TABLE 2>/dev/null
+    ip -6 rule del fwmark \$MARK lookup \$TABLE pref \$TABLE 2>/dev/null
+    ip route flush table \$TABLE 2>/dev/null
+    ip -6 route flush table \$TABLE 2>/dev/null
+    return 0
+}
+
+up() {
+    down
+    for i in \$(seq 1 50); do ss -Hltn "sport = :\$TCP_PORT" | grep -q . && break; sleep 0.2; done
+    # 本机回环与 DNS 不拦：Snell 自己的域名解析照常；其余（含内网地址）交给规则决定
+    nft -f - <<NFT || { down; exit 1; }
+table inet snell_router {
+    chain out_tcp {
+        type nat hook output priority dstnat; policy accept;
+        meta skuid \$SNELL_UID ct direction original meta l4proto tcp th dport 53 return
+        meta skuid \$SNELL_UID ct direction original meta nfproto ipv4 meta l4proto tcp ip daddr != 127.0.0.0/8 redirect to :\$TCP_PORT
+        meta skuid \$SNELL_UID ct direction original meta nfproto ipv6 meta l4proto tcp ip6 daddr != ::1 redirect to :\$TCP_PORT
+    }
+}
+NFT
+    [ "\$UDP" = true ] || return 0
+    nft -f - <<NFT || { down; exit 1; }
+table inet snell_router {
+    chain out_udp {
+        type route hook output priority mangle; policy accept;
+        meta skuid \$SNELL_UID ct direction original meta l4proto udp th dport 53 return
+        meta skuid \$SNELL_UID ct direction original meta nfproto ipv4 meta l4proto udp ip daddr != 127.0.0.0/8 meta mark set \$MARK
+        meta skuid \$SNELL_UID ct direction original meta nfproto ipv6 meta l4proto udp ip6 daddr != ::1 meta mark set \$MARK
+    }
+    chain pre_udp {
+        type filter hook prerouting priority mangle; policy accept;
+        meta mark \$MARK meta nfproto ipv4 meta l4proto udp tproxy ip to 127.0.0.1:\$UDP_PORT accept
+        meta mark \$MARK meta nfproto ipv6 meta l4proto udp tproxy ip6 to [::1]:\$UDP_PORT accept
+    }
+}
+NFT
+    ip rule add fwmark \$MARK lookup \$TABLE pref \$TABLE
+    ip route add local 0.0.0.0/0 dev lo table \$TABLE
+    if [ -s /proc/net/if_inet6 ]; then
+        ip -6 rule add fwmark \$MARK lookup \$TABLE pref \$TABLE
+        ip -6 route add local ::/0 dev lo table \$TABLE
+    fi
+    return 0
+}
+
+case "\$1" in
+    up) up ;;
+    down) down ;;
+    *) echo "用法：\$0 up|down" >&2; exit 2 ;;
+esac
+EOF
+    chmod 755 "$ROUTER_NET"
+}
+
+router_write_unit() {
+    cat > "$ROUTER_UNIT" <<EOF
+[Unit]
+Description=Snell 规则分流（sing-box）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${ROUTER_BIN} run -c ${ROUTER_CONFIG}
+ExecStartPost=${ROUTER_NET} up
+ExecStopPost=${ROUTER_NET} down
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# 各个 Snell 服务（snell、snell-<端口>）
+router_snell_units() {
+    local f n
+    for f in "${SYSTEMD_DIR}"/snell*.service; do
+        [ -f "$f" ] || continue
+        n=$(basename "$f" .service)
+        [[ "$n" =~ ^snell(-[0-9]+)?$ ]] && echo "$n"
+    done
+    return 0
+}
+
+# 不是以 snell 用户运行的 Snell 服务（比如 PSM 装的）：加一个 drop-in 改用 snell 用户，
+# 启动前把它的配置交给 snell 用户读（PSM 重写配置后也自己修好）
+router_fix_service_users() {
+    local unit user conf changed=false
+    for unit in $(router_snell_units); do
+        [ -f "${SYSTEMD_DIR}/${unit}.service.d/${ROUTER_DROPIN_NAME}" ] && continue
+        user=$(systemctl show -p User --value "$unit" 2>/dev/null)
+        [ "$user" = "$SNELL_SERVICE_USER" ] && continue
+        conf=$(sed -n 's/^ExecStart=[^ ]* -c \([^ ]*\).*/\1/p' "${SYSTEMD_DIR}/${unit}.service" | head -n 1)
+        ensure_snell_service_user
+        mkdir -p "${SYSTEMD_DIR}/${unit}.service.d"
+        {
+            echo "# 由 snell.sh 规则分流添加：分流按 snell 用户识别 Snell 的流量"
+            echo "[Service]"
+            echo "User=${SNELL_SERVICE_USER}"
+            echo "Group=${SNELL_SERVICE_GROUP}"
+            echo "AmbientCapabilities=CAP_NET_BIND_SERVICE"
+            [ -n "$conf" ] && echo "ExecStartPre=+/bin/chown ${SNELL_SERVICE_USER}:${SNELL_SERVICE_GROUP} ${conf}"
+        } > "${SYSTEMD_DIR}/${unit}.service.d/${ROUTER_DROPIN_NAME}"
+        echo -e "${YELLOW}${unit} 原先以 ${user:-root} 运行，已改为 ${SNELL_SERVICE_USER} 用户（drop-in，原服务文件不动）${RESET}"
+        changed=true
+        UNITS_TO_RESTART="${UNITS_TO_RESTART} ${unit}"
+    done
+    if [ "$changed" = true ]; then systemctl daemon-reload; fi
+}
+
+router_remove_dropins() {
+    local d unit
+    for d in "${SYSTEMD_DIR}"/snell*.service.d; do
+        [ -f "${d}/${ROUTER_DROPIN_NAME}" ] || continue
+        rm -f "${d}/${ROUTER_DROPIN_NAME}"
+        rmdir "$d" 2>/dev/null || true
+        unit=$(basename "$d" .service.d)
+        systemctl daemon-reload
+        systemctl is-active --quiet "$unit" && systemctl restart "$unit"
+    done
+    return 0
+}
+
+# 启用（或按当前规则重新生成并重启）
+router_enable() {
+    if systemctl is-enabled --quiet snell.socket 2>/dev/null || systemctl is-active --quiet snell.socket 2>/dev/null; then
+        echo -e "${RED}出口控制（netns）开着：那时 Snell 的流量不在本机发起，分流拦不到。请先在菜单 11 关闭出口控制。${RESET}"
+        return 1
+    fi
+    if [ -z "$(router_snell_units)" ]; then
+        echo -e "${RED}没有找到 Snell 服务，请先安装 Snell。${RESET}"
+        return 1
+    fi
+    ensure_cmds jq nft ip ss || return 1
+    router_install_singbox || return 1
+    [ -s "$ROUTER_STATE" ] || router_save_state "$(router_state)"
+    router_write_config || return 1
+    router_write_net_script
+    router_write_unit
+    UNITS_TO_RESTART=""
+    router_fix_service_users
+    systemctl daemon-reload
+    systemctl enable snell-router >/dev/null 2>&1
+    if ! restart_and_verify_service snell-router; then
+        echo -e "${RED}snell-router 没有起来，拦截规则已撤掉，Snell 仍是直连。${RESET}"
+        return 1
+    fi
+    local unit
+    for unit in $UNITS_TO_RESTART; do restart_and_verify_service "$unit" || true; done
+    echo -e "${GREEN}✓ 规则分流已启用（$(router_state | jq '.rules | length') 条规则，其余直连）${RESET}"
+}
+
+# 停用：服务、拦截规则、drop-in 都撤掉，规则与出口保留（再启用时还在）
+router_disable() {
+    systemctl stop snell-router 2>/dev/null
+    systemctl disable snell-router 2>/dev/null
+    [ -x "$ROUTER_NET" ] && "$ROUTER_NET" down
+    router_remove_dropins
+    echo -e "${GREEN}✓ 规则分流已停用，Snell 直连。规则与出口保留，再次启用即恢复。${RESET}"
+}
+
+# 卸载 Snell 时一起删干净
+router_remove() {
+    router_installed || [ -d "$ROUTER_DIR" ] || return 0
+    systemctl stop snell-router 2>/dev/null
+    systemctl disable snell-router 2>/dev/null
+    [ -x "$ROUTER_NET" ] && "$ROUTER_NET" down
+    router_remove_dropins
+    rm -f "$ROUTER_UNIT" "$ROUTER_NET" "$ROUTER_BIN"
+    rm -rf "$ROUTER_DIR"
+    systemctl daemon-reload 2>/dev/null || true
+}
+
+# 规则变了：正在运行就重新生成并重启
+router_apply_if_active() {
+    if router_active || systemctl is-enabled --quiet snell-router 2>/dev/null; then
+        router_write_config && restart_and_verify_service snell-router && echo -e "${GREEN}✓ 已生效${RESET}"
+    else
+        echo -e "${YELLOW}已保存。分流尚未启用：在本菜单选「启用」后生效。${RESET}"
+    fi
+}
+
+router_pick_outbound() {   # → ROUTER_PICK（direct / reject / 出口标签）
+    local state tags i=3 pick
+    state=$(router_state)
+    tags=$(printf '%s' "$state" | jq -r '(.outbounds + .endpoints)[].tag')
+    echo -e "${CYAN}匹配到的流量：${RESET}"
+    echo -e "${GREEN}1.${RESET} 拒绝"
+    echo -e "${GREEN}2.${RESET} 直连"
+    local list=()
+    for t in $tags; do
+        echo -e "${GREEN}${i}.${RESET} 出口：${t}"
+        list+=("$t")
+        i=$((i + 1))
+    done
+    read -rp "请选择 [1-$((i - 1))]: " pick
+    case "$pick" in
+        1) ROUTER_PICK="reject" ;;
+        2) ROUTER_PICK="direct" ;;
+        *)
+            if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 3 ] && [ "$pick" -lt "$i" ]; then
+                ROUTER_PICK="${list[$((pick - 3))]}"
+            else
+                echo -e "${RED}无效选项${RESET}"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 逗号分隔 → JSON 数组（去空格、去空项）
+router_list_json() { printf '%s' "$1" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'; }
+
+router_add_rule() {
+    local pick match label value
+    echo -e "\n${CYAN}=== 添加规则：匹配什么 ===${RESET}"
+    echo -e "${GREEN}1.${RESET} 广告与跟踪（geosite category-ads-all）"
+    echo -e "${GREEN}2.${RESET} 中国大陆的网站与 IP（geosite cn + geoip cn）"
+    echo -e "${GREEN}3.${RESET} 内网与局域网地址（防止客户端借服务器访问内网、云厂商元数据）"
+    echo -e "${GREEN}4.${RESET} BT 下载"
+    echo -e "${GREEN}5.${RESET} AI（OpenAI、Anthropic、Gemini、Perplexity）"
+    echo -e "${GREEN}6.${RESET} 流媒体（Netflix、Disney+、HBO、Prime Video、Hulu）"
+    echo -e "${GREEN}7.${RESET} geosite 分类（输入名称，如 google、telegram，可多个）"
+    echo -e "${GREEN}8.${RESET} geoip 国家 / 地区（输入代码，如 cn、ir，可多个）"
+    echo -e "${GREEN}9.${RESET} 域名后缀（如 example.com，可多个，逗号分隔）"
+    echo -e "${GREEN}10.${RESET} IP 段（如 1.2.3.0/24，可多个）"
+    echo -e "${GREEN}11.${RESET} 远程规则集（sing-box .srs 的地址）"
+    echo -e "${GREEN}0.${RESET} 返回"
+    read -rp "请选择 [0-11]: " pick
+    case "$pick" in
+        1) match='{"rule_set": ["geosite-category-ads-all"]}'; label="广告与跟踪" ;;
+        2) match='{"rule_set": ["geosite-cn", "geoip-cn"]}'; label="中国大陆" ;;
+        3) match='{"ip_is_private": true}'; label="内网地址" ;;
+        4) match='{"protocol": ["bittorrent"]}'; label="BT 下载" ;;
+        5) match='{"rule_set": ["geosite-openai", "geosite-anthropic", "geosite-google-gemini", "geosite-perplexity"]}'; label="AI" ;;
+        6) match='{"rule_set": ["geosite-netflix", "geosite-disney", "geosite-hbo", "geosite-primevideo", "geosite-hulu"]}'; label="流媒体" ;;
+        7|8)
+            local kind; [ "$pick" = 7 ] && kind="geosite" || kind="geoip"
+            read -rp "输入 ${kind} 名称（逗号分隔）: " value
+            match=$(router_list_json "$value" | jq -c --arg k "$kind" 'map(ascii_downcase | select(test("^[a-z0-9@!._-]+$")) | "\($k)-\(.)") | {rule_set: .}')
+            label="${kind} ${value}"
+            ;;
+        9)
+            read -rp "输入域名后缀（逗号分隔）: " value
+            match=$(router_list_json "$value" | jq -c '{domain_suffix: .}')
+            label="域名 ${value}"
+            ;;
+        10)
+            read -rp "输入 IP 段（逗号分隔）: " value
+            match=$(router_list_json "$value" | jq -c '{ip_cidr: .}')
+            label="IP ${value}"
+            ;;
+        11)
+            read -rp "规则集地址（https://…）: " value
+            if [[ ! "$value" =~ ^https://[^[:space:]]+$ ]]; then echo -e "${RED}要一个 https 地址${RESET}"; return 1; fi
+            local tag="custom-$(printf '%s' "$value" | sha256sum | cut -c1-8)"
+            router_save_state "$(router_state | jq --arg t "$tag" --arg u "$value" '.rule_sets[$t] = $u')"
+            match=$(jq -nc --arg t "$tag" '{rule_set: [$t]}')
+            label="规则集 ${value##*/}"
+            ;;
+        0|"") return 0 ;;
+        *) echo -e "${RED}无效选项${RESET}"; return 1 ;;
+    esac
+    if [ -z "$match" ] || printf '%s' "$match" | jq -e 'to_entries[0].value | (type == "array" and length == 0)' >/dev/null; then
+        echo -e "${RED}没有可用的匹配项${RESET}"
+        return 1
+    fi
+    router_pick_outbound || return 1
+    local rule
+    if [ "$ROUTER_PICK" = "reject" ]; then
+        rule=$(printf '%s' "$match" | jq -c --arg l "$label" '. + {action: "reject", _label: $l}')
+    else
+        rule=$(printf '%s' "$match" | jq -c --arg l "$label" --arg o "$ROUTER_PICK" '. + {outbound: $o, _label: $l}')
+    fi
+    router_save_state "$(router_state | jq --argjson r "$rule" '.rules += [$r]')"
+    echo -e "${GREEN}✓ 已添加：$(router_rule_text "$rule")${RESET}"
+    router_apply_if_active
+}
+
+router_delete_rule() {
+    local n pick
+    n=$(router_state | jq '.rules | length')
+    if [ "$n" -eq 0 ]; then echo -e "${YELLOW}还没有规则${RESET}"; return 0; fi
+    router_list_rules
+    read -rp "删除第几条 [1-${n}]（0 返回）: " pick
+    [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || return 0
+    router_save_state "$(router_state | jq --argjson i "$((pick - 1))" 'del(.rules[$i])')"
+    echo -e "${GREEN}✓ 已删除${RESET}"
+    router_apply_if_active
+}
+
+router_list_rules() {
+    local i=1 rule
+    while IFS= read -r rule; do
+        [ -n "$rule" ] || continue
+        echo -e "  ${GREEN}${i}.${RESET} $(router_rule_text "$rule")"
+        i=$((i + 1))
+    done < <(router_state | jq -c '.rules[]')
+    echo -e "  ${CYAN}其余 → 直连${RESET}"
+}
+
+router_add_outbound() {
+    local pick tag server port user pass method ob
+    echo -e "\n${CYAN}=== 添加出口 ===${RESET}"
+    echo -e "${GREEN}1.${RESET} SOCKS5"
+    echo -e "${GREEN}2.${RESET} HTTP 代理"
+    echo -e "${GREEN}3.${RESET} Shadowsocks"
+    echo -e "${GREEN}4.${RESET} WireGuard（如 Cloudflare WARP，填 wgcf 等工具生成的参数）"
+    echo -e "${GREEN}0.${RESET} 返回"
+    read -rp "请选择 [0-4]: " pick
+    [ "$pick" = "0" ] || [ -z "$pick" ] && return 0
+    read -rp "出口名称（字母、数字、- _）: " tag
+    if [[ ! "$tag" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || [ "$tag" = "direct" ]; then echo -e "${RED}名称无效${RESET}"; return 1; fi
+    if router_state | jq -e --arg t "$tag" '(.outbounds + .endpoints) | any(.tag == $t)' >/dev/null; then
+        echo -e "${RED}已有同名出口${RESET}"; return 1
+    fi
+    case "$pick" in
+        1|2|3)
+            read -rp "服务器地址: " server
+            read -rp "端口: " port
+            [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo -e "${RED}端口无效${RESET}"; return 1; }
+            ;;
+    esac
+    case "$pick" in
+        1|2)
+            read -rp "用户名（没有就回车）: " user
+            read -rp "密码（没有就回车）: " pass
+            ob=$(jq -nc --arg ty "$([ "$pick" = 1 ] && echo socks || echo http)" --arg t "$tag" --arg s "$server" --argjson p "$port" --arg u "$user" --arg pw "$pass" '
+                {type: $ty, tag: $t, server: $s, server_port: $p}
+                + (if $ty == "socks" then {version: "5"} else {} end)
+                + (if $u != "" then {username: $u, password: $pw} else {} end)')
+            router_save_state "$(router_state | jq --argjson o "$ob" '.outbounds += [$o]')"
+            ;;
+        3)
+            read -rp "加密方式（如 2022-blake3-aes-128-gcm、aes-256-gcm）: " method
+            read -rp "密码: " pass
+            ob=$(jq -nc --arg t "$tag" --arg s "$server" --argjson p "$port" --arg m "$method" --arg pw "$pass" \
+                '{type: "shadowsocks", tag: $t, server: $s, server_port: $p, method: $m, password: $pw}')
+            router_save_state "$(router_state | jq --argjson o "$ob" '.outbounds += [$o]')"
+            ;;
+        4)
+            local key addr peer_key endpoint reserved
+            read -rp "本机私钥（PrivateKey）: " key
+            read -rp "本机地址（Address，多个用逗号，如 172.16.0.2/32,2606:4700:110:8a36::1/128）: " addr
+            read -rp "对端公钥（PublicKey）: " peer_key
+            read -rp "对端地址:端口（Endpoint，如 162.159.192.1:2408）: " endpoint
+            read -rp "reserved（WARP 用，如 1,2,3；没有就回车）: " reserved
+            [[ "$endpoint" =~ ^(.+):([0-9]+)$ ]] || { echo -e "${RED}Endpoint 要写成 地址:端口${RESET}"; return 1; }
+            ob=$(jq -nc --arg t "$tag" --arg k "$key" --argjson a "$(router_list_json "$addr")" --arg pk "$peer_key" \
+                    --arg h "$(echo "${BASH_REMATCH[1]}" | tr -d '[]')" --argjson p "${BASH_REMATCH[2]}" --argjson r "$(router_list_json "$reserved" | jq -c 'map(tonumber)')" '
+                {type: "wireguard", tag: $t, address: $a, private_key: $k, mtu: 1280,
+                 peers: [{address: $h, port: $p, public_key: $pk, allowed_ips: ["0.0.0.0/0", "::/0"]}
+                         + (if ($r | length) == 3 then {reserved: $r} else {} end)]}')
+            router_save_state "$(router_state | jq --argjson o "$ob" '.endpoints += [$o]')"
+            ;;
+        *) echo -e "${RED}无效选项${RESET}"; return 1 ;;
+    esac
+    echo -e "${GREEN}✓ 已添加出口 ${tag}。在「添加规则」里选它，匹配的流量就从这里出去。${RESET}"
+    router_apply_if_active
+}
+
+router_delete_outbound() {
+    local tags pick i=1 list=()
+    tags=$(router_state | jq -r '(.outbounds + .endpoints)[].tag')
+    [ -n "$tags" ] || { echo -e "${YELLOW}还没有出口${RESET}"; return 0; }
+    for t in $tags; do echo -e "  ${GREEN}${i}.${RESET} ${t}"; list+=("$t"); i=$((i + 1)); done
+    read -rp "删除第几个（0 返回）: " pick
+    [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -lt "$i" ] || return 0
+    local tag="${list[$((pick - 1))]}"
+    if router_state | jq -e --arg t "$tag" 'any(.rules[]; .outbound == $t)' >/dev/null; then
+        echo -e "${RED}还有规则用着 ${tag}，先删掉那些规则${RESET}"
+        return 1
+    fi
+    router_save_state "$(router_state | jq --arg t "$tag" '.outbounds |= map(select(.tag != $t)) | .endpoints |= map(select(.tag != $t))')"
+    echo -e "${GREEN}✓ 已删除出口 ${tag}${RESET}"
+    router_apply_if_active
+}
+
+router_toggle_udp() {
+    local udp
+    udp=$(router_state | jq -r '.udp')
+    if [ "$udp" = true ]; then udp=false; else udp=true; fi
+    router_save_state "$(router_state | jq --argjson u "$udp" '.udp = $u')"
+    echo -e "${GREEN}✓ UDP 分流：$([ "$udp" = true ] && echo 开 || echo 关（UDP 直连）)${RESET}"
+    if router_active; then router_enable; fi
+}
+
+# 菜单
+router_menu() {
+    ensure_cmds jq || return 1
+    while true; do
+        echo -e "\n${CYAN}=============== 规则分流（sing-box）===============${RESET}"
+        echo -e "${YELLOW}Snell 仍是官方 snell-server；它连出去的流量按下面的规则走，其余直连。${RESET}"
+        if router_active; then
+            echo -e "${GREEN}状态：运行中（sing-box ${ROUTER_SINGBOX_VERSION}，UDP $(router_state | jq -r 'if .udp then "也分流" else "直连" end')）${RESET}"
+        elif router_installed; then
+            echo -e "${YELLOW}状态：已停用${RESET}"
+        else
+            echo -e "${YELLOW}状态：未启用${RESET}"
+        fi
+        echo -e "${CYAN}规则（从上往下，先匹配到的生效）：${RESET}"
+        router_list_rules
+        local obs
+        obs=$(router_state | jq -r '[(.outbounds + .endpoints)[] | "\(.tag)（\(.type)）"] | join("、")')
+        [ -n "$obs" ] && echo -e "${CYAN}出口：${RESET}${obs}"
+        echo -e "\n${GREEN}1.${RESET} 启用 / 重新生成并重启"
+        echo -e "${GREEN}2.${RESET} 添加规则"
+        echo -e "${GREEN}3.${RESET} 删除规则"
+        echo -e "${GREEN}4.${RESET} 添加出口（SOCKS5 / HTTP / Shadowsocks / WireGuard）"
+        echo -e "${GREEN}5.${RESET} 删除出口"
+        echo -e "${GREEN}6.${RESET} UDP 分流 开 / 关"
+        echo -e "${GREEN}7.${RESET} 停用分流（恢复直连）"
+        echo -e "${GREEN}8.${RESET} 查看日志"
+        echo -e "${GREEN}0.${RESET} 返回"
+        local choice
+        read -rp "请选择 [0-8]: " choice || return 0
+        case "$choice" in
+            1) router_enable ;;
+            2) router_add_rule ;;
+            3) router_delete_rule ;;
+            4) router_add_outbound ;;
+            5) router_delete_outbound ;;
+            6) router_toggle_udp ;;
+            7) router_disable ;;
+            8) journalctl -u snell-router -n 40 --no-pager 2>/dev/null ;;
+            0|"") return 0 ;;
+            *) echo -e "${RED}无效选项${RESET}" ;;
+        esac
+    done
+}
+
+
+#当前版本号
+current_version="6.0"
+
+# 出口控制（netns + socket activation）默认参数
+EGRESS_FEATURE_ENABLED="false"
+EGRESS_IFACE=""
+EGRESS_NS="snell-egress"
+EGRESS_HOST_IP=""
+EGRESS_NS_IP=""
+EGRESS_SUBNET=""
+EGRESS_GW=""
 
 validate_snell_main_config() {
     migrate_legacy_main_config_if_needed || true
@@ -1264,128 +2374,7 @@ check_and_migrate_config() {
     fi
 }
 
-
-# 等待其他 apt 进程完成
-wait_for_apt() {
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
-        echo -e "${YELLOW}等待其他 apt 进程完成...${RESET}"
-        sleep 1
-    done
-}
-
-# 检查是否以 root 权限运行
-check_root() {
-    if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}请以 root 权限运行此脚本.${RESET}"
-        exit 1
-    fi
-}
 check_root
-
-# 检查 jq 是否安装
-check_jq() {
-    if ! command -v jq &> /dev/null; then
-        echo -e "${YELLOW}未检测到 jq，正在安装...${RESET}"
-        # 根据系统类型安装 jq
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y jq
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y jq
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 jq。请手动安装 jq。${RESET}"
-            exit 1
-        fi
-    fi
-}
-check_jq
-
-# 检查 Snell 是否已安装
-check_snell_installed() {
-    if command -v snell-server &> /dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# 比较版本号（复用 snell_version_sort_key，正确处理 b4 / rc / rc2 / 正式版）
-version_greater_equal() {
-    local key1 key2
-    key1=$(snell_version_sort_key "$1")
-    key2=$(snell_version_sort_key "$2")
-
-    [[ "$key1" > "$key2" || "$key1" == "$key2" ]]
-}
-
-# 用户输入端口号，范围 1-65535
-get_user_port() {
-    while true; do
-        read -rp "请输入要使用的端口号 (1-65535): " PORT
-        if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
-            if is_port_in_use "$PORT"; then
-                echo -e "${YELLOW}警告：端口 ${PORT} 当前已被占用${RESET}"
-                show_port_occupier "$PORT"
-                read -rp "仍要使用该端口吗? [y/N]: " port_confirm
-                case "$port_confirm" in
-                    [yY]|[yY][eE][sS]) ;;
-                    *)
-                        echo -e "${CYAN}请重新选择端口${RESET}"
-                        continue
-                        ;;
-                esac
-            fi
-            echo -e "${GREEN}已选择端口: $PORT${RESET}"
-            break
-        else
-            echo -e "${RED}无效端口号，请输入 1 到 65535 之间的数字。${RESET}"
-        fi
-    done
-}
-
-# 获取系统DNS
-get_system_dns() {
-    # 尝试从resolv.conf获取系统DNS
-    if [ -f "/etc/resolv.conf" ]; then
-        system_dns=$(grep -E '^nameserver' /etc/resolv.conf | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
-        if [ ! -z "$system_dns" ]; then
-            echo "$system_dns"
-            return 0
-        fi
-    fi
-    
-    # 如果无法从resolv.conf获取，尝试使用公共DNS
-    echo "1.1.1.1,8.8.8.8"
-}
-
-# 获取用户输入的 DNS 服务器
-get_dns() {
-    read -rp "请输入 DNS 服务器地址 (直接回车使用系统DNS): " custom_dns
-    if [ -z "$custom_dns" ]; then
-        DNS=$(get_system_dns)
-        echo -e "${GREEN}使用系统 DNS 服务器: $DNS${RESET}"
-    else
-        DNS=$custom_dns
-        echo -e "${GREEN}使用自定义 DNS 服务器: $DNS${RESET}"
-    fi
-}
-
-# 是否启用 IPv6
-get_ipv6_choice() {
-    IPV6_ENABLE="true"
-    LISTEN_ADDR="::0"
-    read -rp "是否启用 IPv6? [Y/n]: " ipv6_choice
-    case "$ipv6_choice" in
-        [nN]|[nN][oO])
-            IPV6_ENABLE="false"
-            LISTEN_ADDR="0.0.0.0"
-            echo -e "${GREEN}已关闭 IPv6，仅监听 IPv4${RESET}"
-            ;;
-        *)
-            echo -e "${GREEN}已启用 IPv6${RESET}"
-            ;;
-    esac
-}
 
 # 是否启用 Snell v5/v6 出口控制
 get_egress_feature_choice() {
@@ -1469,31 +2458,7 @@ check_egress_dependencies() {
         return
     fi
 
-    if ! command -v ip &> /dev/null; then
-        echo -e "${YELLOW}未检测到 iproute2，正在安装...${RESET}"
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y iproute2
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y iproute
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 iproute2。${RESET}"
-            exit 1
-        fi
-    fi
-
-    if ! command -v nft &> /dev/null; then
-        echo -e "${YELLOW}未检测到 nftables，正在安装...${RESET}"
-        if [ -x "$(command -v apt)" ]; then
-            wait_for_apt
-            apt update && apt install -y nftables
-        elif [ -x "$(command -v yum)" ]; then
-            yum install -y nftables
-        else
-            echo -e "${RED}未支持的包管理器，无法安装 nftables。${RESET}"
-            exit 1
-        fi
-    fi
+    ensure_cmds ip nft || exit 1
 }
 
 # 写入 netns 初始化单元
@@ -1629,40 +2594,6 @@ WantedBy=multi-user.target
 EOF
 }
 
-# 检查端口是否被占用（TCP/UDP）
-is_port_in_use() {
-    local port="$1"
-    if command -v ss &> /dev/null; then
-        ss -H -ltn "( sport = :${port} )" 2>/dev/null | grep -q . && return 0
-        ss -H -lun "( sport = :${port} )" 2>/dev/null | grep -q . && return 0
-        return 1
-    fi
-
-    if command -v lsof &> /dev/null; then
-        lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
-        lsof -nP -iUDP:"${port}" >/dev/null 2>&1
-        return $?
-    fi
-
-    return 1
-}
-
-# 显示占用指定端口的进程信息
-show_port_occupier() {
-    local port="$1"
-    if command -v ss &> /dev/null; then
-        ss -ltnp "( sport = :${port} )" 2>/dev/null | sed 's/^/  /'
-        ss -lunp "( sport = :${port} )" 2>/dev/null | sed 's/^/  /'
-        return
-    fi
-
-    if command -v lsof &> /dev/null; then
-        lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sed 's/^/  /'
-        lsof -nP -iUDP:"${port}" 2>/dev/null | sed 's/^/  /'
-    fi
-}
-
-# 按端口强制清理监听进程（优先清理 snell 相关，最后兜底清理全部监听者）
 # 按端口释放监听进程：只自动处理 snell 相关进程；
 # 非 snell 进程必须经用户明确确认才会结束，避免误杀 nginx/sshd 等服务
 force_release_port_by_pid() {
@@ -1755,169 +2686,6 @@ ensure_main_port_free_for_socket() {
     return 1
 }
 
-# 保存 nftables 规则
-save_nftables_rules() {
-    if ! command -v nft &> /dev/null; then
-        return
-    fi
-
-    if [ -f "/etc/nftables.conf" ]; then
-        nft list ruleset > /etc/nftables.conf 2>/dev/null || true
-        systemctl enable nftables >/dev/null 2>&1 || true
-        echo -e "${GREEN}nftables 规则已保存${RESET}"
-    elif [ -f "/etc/sysconfig/nftables.conf" ]; then
-        nft list ruleset > /etc/sysconfig/nftables.conf 2>/dev/null || true
-        systemctl enable nftables >/dev/null 2>&1 || true
-        echo -e "${GREEN}nftables 规则已保存${RESET}"
-    else
-        echo -e "${YELLOW}未找到 nftables 持久化配置文件，端口规则已在当前运行环境生效${RESET}"
-    fi
-}
-
-# 在 nftables 中开放端口
-open_nftables_port() {
-    local PORT=$1
-    local chains
-    local chain_opened=false
-
-    if ! command -v nft &> /dev/null; then
-        return
-    fi
-
-    echo -e "${CYAN}在 nftables 中开放端口 $PORT${RESET}"
-
-    chains=$(nft -a list ruleset 2>/dev/null | awk '
-        $1 == "table" {
-            family=$2
-            table=$3
-            gsub(/[{}]/, "", table)
-        }
-        $1 == "chain" {
-            chain=$2
-            gsub(/[{}]/, "", chain)
-            in_chain=1
-            next
-        }
-        in_chain && /type filter/ && /hook input/ {
-            print family " " table " " chain
-        }
-        in_chain && /^[[:space:]]*}/ {
-            in_chain=0
-        }
-    ')
-
-    while read -r family table chain; do
-        [ -z "$family" ] && continue
-
-        if ! nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -q "tcp dport $PORT .*accept"; then
-            nft insert rule "$family" "$table" "$chain" tcp dport "$PORT" accept 2>/dev/null || true
-        fi
-        if ! nft list chain "$family" "$table" "$chain" 2>/dev/null | grep -q "udp dport $PORT .*accept"; then
-            nft insert rule "$family" "$table" "$chain" udp dport "$PORT" accept 2>/dev/null || true
-        fi
-        chain_opened=true
-    done << EOF
-$chains
-EOF
-
-    if [ "$chain_opened" = false ]; then
-        nft add table inet snell_filter 2>/dev/null || true
-        nft list chain inet snell_filter input >/dev/null 2>&1 || nft add chain inet snell_filter input '{ type filter hook input priority -5; policy accept; }'
-        if ! nft list chain inet snell_filter input 2>/dev/null | grep -q "tcp dport $PORT .*accept"; then
-            nft add rule inet snell_filter input tcp dport "$PORT" accept 2>/dev/null || true
-        fi
-        if ! nft list chain inet snell_filter input 2>/dev/null | grep -q "udp dport $PORT .*accept"; then
-            nft add rule inet snell_filter input udp dport "$PORT" accept 2>/dev/null || true
-        fi
-    fi
-
-    save_nftables_rules
-}
-
-# 开放端口 (ufw、nftables 和 iptables)
-open_port() {
-    local PORT=$1
-    local ufw_active=false
-
-    # 检查 ufw 是否已安装
-    if command -v ufw &> /dev/null; then
-        echo -e "${CYAN}在 UFW 中开放端口 $PORT${RESET}"
-        ufw allow "$PORT"/tcp
-        ufw allow "$PORT"/udp
-        if ufw status 2>/dev/null | grep -qw "active"; then
-            ufw_active=true
-        fi
-    fi
-
-    # 检查 iptables 是否已安装
-    if command -v iptables &> /dev/null; then
-        echo -e "${CYAN}在 iptables 中开放端口 $PORT${RESET}"
-        # 已存在则跳过，避免重复安装时堆积重复规则
-        iptables -C INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT
-        iptables -C INPUT -p udp --dport "$PORT" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$PORT" -j ACCEPT
-        
-        # 创建 iptables 规则保存目录（如果不存在）
-        if [ ! -d "/etc/iptables" ]; then
-            mkdir -p /etc/iptables
-        fi
-        
-        # 尝试保存规则，如果失败则不中断脚本
-        iptables-save > /etc/iptables/rules.v4 || true
-    fi
-
-    if [ "$ufw_active" = false ]; then
-        open_nftables_port "$PORT"
-    fi
-}
-
-close_nftables_port() {
-    local PORT=$1
-
-    if ! command -v nft &> /dev/null; then
-        return
-    fi
-
-    nft -a list ruleset 2>/dev/null | awk -v port="$PORT" '
-        $1 == "table" {
-            family=$2
-            table=$3
-            gsub(/[{}]/, "", table)
-        }
-        $1 == "chain" {
-            chain=$2
-            gsub(/[{}]/, "", chain)
-        }
-        ($0 ~ "tcp dport " port " .*accept" || $0 ~ "udp dport " port " .*accept") && /# handle/ {
-            handle=$NF
-            print family " " table " " chain " " handle
-        }
-    ' | while read -r family table chain handle; do
-        [ -z "$handle" ] && continue
-        nft delete rule "$family" "$table" "$chain" handle "$handle" 2>/dev/null || true
-    done
-
-    save_nftables_rules
-}
-
-close_port() {
-    local PORT=$1
-
-    if command -v ufw &> /dev/null; then
-        ufw delete allow "$PORT"/tcp >/dev/null 2>&1 || true
-        ufw delete allow "$PORT"/udp >/dev/null 2>&1 || true
-    fi
-
-    if command -v iptables &> /dev/null; then
-        iptables -D INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null || true
-        iptables -D INPUT -p udp --dport "$PORT" -j ACCEPT 2>/dev/null || true
-        if [ -d "/etc/iptables" ]; then
-            iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-        fi
-    fi
-
-    close_nftables_port "$PORT"
-}
-
 # 启用 egress 运行时：优先 socket + service；失败回退为 netns 直启服务
 start_egress_runtime() {
     local port="$1"
@@ -1959,6 +2727,12 @@ start_egress_runtime() {
 }
 
 # 安装 Snell
+# 读主配置里 key = value 的值（取第一个 = 之后的全部，base64 PSK 里的 = 不会被截掉）
+main_conf_value() {
+    grep -E "^[[:space:]]*$1[[:space:]]*=" "$SNELL_CONF_FILE" 2>/dev/null | head -n 1 \
+        | sed -e 's/^[^=]*=[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 install_snell() {
     echo -e "${CYAN}正在安装 Snell${RESET}"
 
@@ -2006,19 +2780,17 @@ install_snell() {
         esac
         # 从已有配置读取端口/PSK 等信息，供后续开防火墙、启服务、展示配置使用
         PORT=$(get_snell_port)
-        PSK=$(grep -E '^[[:space:]]*psk[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
-        IPV6_ENABLE=$(grep -E '^[[:space:]]*ipv6[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+        PSK=$(main_conf_value psk)
+        IPV6_ENABLE=$(main_conf_value ipv6)
         if [ -z "$IPV6_ENABLE" ]; then
-            if [ "$SNELL_VERSION_CHOICE" = "v6" ]; then
-                # v6 配置没有 ipv6 键，按 dns-ip-preference 推断（仅用于安装总结展示，不改配置）
-                _keep_dip=$(grep -E '^[[:space:]]*dns-ip-preference[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
-                if [ "$_keep_dip" = "ipv4-only" ]; then IPV6_ENABLE="false"; else IPV6_ENABLE="true"; fi
-                unset _keep_dip
+            # v6 配置没有 ipv6 键，按 dns-ip-preference 推断（仅用于安装总结展示，不改配置）
+            if [ "$(main_conf_value dns-ip-preference)" = "ipv4-only" ]; then
+                IPV6_ENABLE="false"
             else
                 IPV6_ENABLE="true"
             fi
         fi
-        DNS=$(grep -E '^[[:space:]]*dns[[:space:]]*=' "$SNELL_CONF_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' ')
+        DNS=$(main_conf_value dns)
         [ -z "$DNS" ] && DNS="8.8.8.8"
         if [ -z "$PORT" ] || [ -z "$PSK" ]; then
             echo -e "${RED}已有配置缺少端口或 PSK，可能已损坏，请选择全新安装。${RESET}"
@@ -2028,13 +2800,13 @@ install_snell() {
         # （netns 初始化脚本不重写：重写需要安装时的接口/子网参数，磁盘上的已是正确的）
         if [ -f "$SYSTEMD_SOCKET_FILE" ]; then
             EGRESS_FEATURE_ENABLED="true"
-            # 从磁盘上的 netns 初始化脚本还原接口/命名空间名，供安装总结展示用
+            # 从磁盘上的 netns 初始化脚本还原接口/命名空间名，socket 单元与安装总结要用
             if [ -f "${NETNS_SETUP_SCRIPT}" ]; then
-                _keep_ns=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "${NETNS_SETUP_SCRIPT}" | head -n 1)
-                [ -n "$_keep_ns" ] && EGRESS_NS="$_keep_ns"
-                _keep_iface=$(grep -o 'oifname "[^"]*"' "${NETNS_SETUP_SCRIPT}" 2>/dev/null | head -n 1 | cut -d'"' -f2)
-                [ -n "$_keep_iface" ] && EGRESS_IFACE="$_keep_iface"
-                unset _keep_ns _keep_iface
+                local keep_ns keep_iface
+                keep_ns=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "${NETNS_SETUP_SCRIPT}" | head -n 1)
+                [ -n "$keep_ns" ] && EGRESS_NS="$keep_ns"
+                keep_iface=$(grep -o 'oifname "[^"]*"' "${NETNS_SETUP_SCRIPT}" 2>/dev/null | head -n 1 | cut -d'"' -f2)
+                [ -n "$keep_iface" ] && EGRESS_IFACE="$keep_iface"
             fi
         else
             EGRESS_FEATURE_ENABLED="false"
@@ -2045,8 +2817,7 @@ install_snell() {
         select_snell_version
     fi
 
-    wait_for_apt
-    apt update && apt install -y wget unzip
+    ensure_cmds curl unzip || exit 1
 
     # 若机器上还是旧的单版本布局，先迁成版本化布局，避免装新通道时覆盖掉在用的二进制
     migrate_snell_binary_layout
@@ -2060,10 +2831,7 @@ install_snell() {
     # 主用户所用通道决定 snell-server 软链指向
     update_snell_symlink "$SNELL_VERSION_CHOICE"
 
-    if [ "$keep_existing_conf" = "true" ]; then
-        # 保留模式：端口/PSK/DNS 等全部沿用已有配置文件，不重新询问也不覆盖
-        :
-    else
+    if [ "$keep_existing_conf" != "true" ]; then
         get_user_port  # 获取用户输入的端口
         get_dns # 获取用户输入的 DNS 服务器
         get_ipv6_choice # 是否启用 IPv6
@@ -2085,9 +2853,15 @@ install_snell() {
 
     write_main_systemd_service
 
-    if [ "$EGRESS_FEATURE_ENABLED" = "true" ] && [ "$keep_existing_conf" != "true" ]; then
-        write_snell_netns_service
-        write_snell_socket_service_units "$PORT" "$LISTEN_ADDR"
+    if [ "$EGRESS_FEATURE_ENABLED" = "true" ]; then
+        # 保留模式沿用磁盘上的 netns 初始化脚本；snell.service 刚被改写成普通版，
+        # socket 版的单元要重新写回（监听地址从配置里推导）
+        if [ "$keep_existing_conf" != "true" ]; then
+            write_snell_netns_service
+            write_snell_socket_service_units "$PORT" "$LISTEN_ADDR"
+        else
+            write_snell_socket_service_units "$PORT"
+        fi
     fi
 
     systemctl daemon-reload
@@ -2162,14 +2936,14 @@ install_snell() {
     echo -e "\n${GREEN}服务器地址信息：${RESET}"
     
     # 获取 IPv4 地址
-    IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
+    IPV4_ADDR=$(get_public_ipv4)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
         IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
 
     # 获取 IPv6 地址
-    IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
+    IPV6_ADDR=$(get_public_ipv6)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
         IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
@@ -2213,7 +2987,7 @@ fi
 # 下载并执行最新版本的脚本（带完整性校验：传输失败即停、非空、语法检查）
 echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
 TMP_SCRIPT=$(mktemp)
-if curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh -o "$TMP_SCRIPT" \
+if curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 https://snell.jinqians.com -o "$TMP_SCRIPT" \
     && [ -s "$TMP_SCRIPT" ] && bash -n "$TMP_SCRIPT" 2>/dev/null; then
     bash "$TMP_SCRIPT"
     rm -f "$TMP_SCRIPT"
@@ -2284,6 +3058,10 @@ configure_v5_egress_control() {
 
     case "$egress_manage_choice" in
         1)
+            if router_active; then
+                echo -e "${RED}规则分流正在运行：出口控制把 Snell 放进单独的网络命名空间后，分流就拦不到它的流量。请先在菜单 12 停用分流。${RESET}"
+                return 1
+            fi
             EGRESS_FEATURE_ENABLED="true"
             get_egress_settings
             check_egress_dependencies
@@ -2347,6 +3125,9 @@ configure_v5_egress_control() {
 uninstall_snell() {
     echo -e "${CYAN}正在卸载 Snell${RESET}"
 
+    # 规则分流（sing-box）一起删掉：拦截规则、服务、配置
+    router_remove
+
     # 停止并删除依赖 Snell 后端的 ShadowTLS 服务，避免留下无后端的监听服务
     local snell_shadowtls_services
     snell_shadowtls_services=$(find "${SYSTEMD_DIR}" -maxdepth 1 -name "shadowtls-snell-*.service" 2>/dev/null)
@@ -2356,7 +3137,7 @@ uninstall_snell() {
             local service_name
             service_name=$(basename "$service_file")
             local shadowtls_port
-            shadowtls_port=$(sed -n 's/.*--listen .*:\([0-9][0-9]*\).*/\1/p' "$service_file" | head -n 1)
+            shadowtls_port=$(sed -n 's/.*--listen [^ ]*:\([0-9][0-9]*\).*/\1/p' "$service_file" | head -n 1)
             echo -e "${YELLOW}正在停止 ShadowTLS 服务 (${service_name})${RESET}"
             systemctl stop "$service_name" 2>/dev/null
             systemctl disable "$service_name" 2>/dev/null
@@ -2422,12 +3203,13 @@ uninstall_snell() {
         done
     fi
 
-    # 删除服务文件
+    # 删除服务文件（含旧版 CentOS 脚本写的 preset）
     rm -f /lib/systemd/system/snell.service
     rm -f ${SYSTEMD_SERVICE_FILE}
     rm -f ${SYSTEMD_SOCKET_FILE}
     rm -f ${SYSTEMD_NETNS_FILE}
     rm -f ${NETNS_SETUP_SCRIPT}
+    rm -f /usr/lib/systemd/system-preset/90-snell.preset
 
     # 删除各通道二进制、软链与更新时留下的备份
     local version
@@ -2462,7 +3244,7 @@ uninstall_snell() {
 
     # 重载 systemd 配置
     systemctl daemon-reload
-    
+
     echo -e "${GREEN}Snell 及其所有多用户配置已成功卸载${RESET}"
 }
 
@@ -2642,6 +3424,13 @@ check_and_show_status() {
     else
         echo -e "${YELLOW}ShadowTLS 未安装${RESET}"
     fi
+
+    # 规则分流（只在启用过时显示）
+    if router_active; then
+        echo -e "${GREEN}规则分流 运行中${RESET}  ${YELLOW}$(jq '.rules | length' "$ROUTER_STATE" 2>/dev/null || echo 0) 条规则${RESET}"
+    elif router_installed; then
+        echo -e "${YELLOW}规则分流 已停用${RESET}"
+    fi
     
     echo -e "${CYAN}============================================${RESET}\n"
 }
@@ -2661,14 +3450,14 @@ view_snell_config() {
     fi
     
     # 获取 IPv4 地址
-    IPV4_ADDR=$(curl -s4 --connect-timeout 5 --max-time 10 https://api.ipify.org)
+    IPV4_ADDR=$(get_public_ipv4)
     if [ $? -eq 0 ] && [ ! -z "$IPV4_ADDR" ]; then
         IP_COUNTRY_IPV4=$(get_ip_country "${IPV4_ADDR}")
         echo -e "${GREEN}IPv4 地址: ${RESET}${IPV4_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV4}"
     fi
 
     # 获取 IPv6 地址
-    IPV6_ADDR=$(curl -s6 --connect-timeout 5 --max-time 10 https://api64.ipify.org)
+    IPV6_ADDR=$(get_public_ipv6)
     if [ $? -eq 0 ] && [ ! -z "$IPV6_ADDR" ]; then
         IP_COUNTRY_IPV6=$(get_ip_country "${IPV6_ADDR}")
         echo -e "${GREEN}IPv6 地址: ${RESET}${IPV6_ADDR} ${GREEN}所在国家: ${RESET}${IP_COUNTRY_IPV6}"
@@ -2809,57 +3598,6 @@ view_snell_config() {
     read -p "按任意键返回主菜单..."
 }
 
-# =========================================
-# Snell 版本管理：按通道更新 / 追加通道 / 切换用户通道
-# =========================================
-# 读取某通道二进制自报的具体版本号（如 v5.0.1）
-get_channel_binary_version() {
-    local version="$1"
-    local binary
-    binary=$(snell_binary_for_version "$version")
-    [ -x "$binary" ] || return 1
-
-    local detail
-    detail=$("$binary" --v 2>&1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9]*' | head -n 1)
-    if [ -z "$detail" ]; then
-        # 早期 v4 的 --v 不打印版本号，用内置常量兜底
-        case "$version" in
-            v4) detail="$SNELL_V4_FALLBACK" ;;
-            v5) detail="$SNELL_V5_FALLBACK" ;;
-            v6) detail="$SNELL_V6_FALLBACK" ;;
-        esac
-    fi
-    echo "$detail"
-}
-
-# 重启服务并确认真的起来了；起不来打印日志尾部，不让用户自己翻
-restart_and_verify_service() {
-    local service="$1"
-    local waited=0
-
-    if ! systemctl restart "$service" 2>/dev/null; then
-        echo -e "${RED}systemctl restart ${service} 返回失败${RESET}"
-        journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
-        return 1
-    fi
-
-    while [ "$waited" -lt 10 ]; do
-        if systemctl is-active --quiet "$service"; then
-            return 0
-        fi
-        # socket 激活场景下主服务按需拉起，socket 活着即视为正常
-        if [ "$service" = "snell" ] && systemctl is-active --quiet snell.socket; then
-            return 0
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-
-    echo -e "${RED}${service} 在 ${waited} 秒内未进入 active 状态${RESET}"
-    journalctl -u "$service" -n 30 --no-pager 2>/dev/null | sed 's/^/   /'
-    return 1
-}
-
 # 更新单个通道的二进制到最新版本。
 # 不改动任何用户的通道归属，配置格式因此不变，只重启用到该通道的服务。
 update_snell_channel() {
@@ -2942,16 +3680,6 @@ update_snell_channel() {
     # 回滚点的使命到此结束，删掉避免 ${INSTALL_DIR} 里越积越多
     [ -n "$backup_binary" ] && rm -f "$backup_binary"
     return 0
-}
-
-# 切换/回滚用的备份统一放在 ${SNELL_CONF_DIR}/backup 下。
-# 不能放进 users/ —— 多处循环是按 users/* 遍历的，备份文件会被当成真实用户。
-snell_backup_path() {
-    local src="$1"
-    local stamp="$2"
-    local dir="${SNELL_CONF_DIR}/backup"
-    mkdir -p "$dir" 2>/dev/null || return 1
-    echo "${dir}/$(basename "$src").${stamp}"
 }
 
 # 把一个配置切换到目标通道：备好二进制 -> 迁移配置参数 -> 改 unit -> 重启，失败自动回滚
@@ -3249,7 +3977,7 @@ update_script() {
     TMP_SCRIPT=$(mktemp)
 
     # 下载最新版本（带完整性校验）
-    if fetch_verified_script https://raw.githubusercontent.com/jinqians/snell.sh/main/snell.sh "$TMP_SCRIPT"; then
+    if fetch_verified_script "$SNELL_SCRIPT_URL" "$TMP_SCRIPT"; then
         # 获取新版本号
         new_version=$(grep -m1 -E '^current_version="' "$TMP_SCRIPT" | cut -d'"' -f2)
 
@@ -3296,60 +4024,11 @@ update_script() {
     fi
 }
 
-# 检查是否安装的函数
-check_installation() {
-    local service=$1
-    if systemctl list-unit-files | grep -q "^$service.service"; then
-        echo -e "${GREEN}已安装${RESET}"
-    else
-        echo -e "${RED}未安装${RESET}"
-    fi
-}
-
-# 获取 ShadowTLS 配置
-get_shadowtls_config() {
-    # 获取主 Snell 端口
-    local main_port=$(get_snell_port)
-    if [ -z "$main_port" ]; then
-        return 1
-    fi
-    
-    # 检查对应端口的 ShadowTLS 服务
-    local service_name="shadowtls-snell-${main_port}"
-    if ! systemctl is-active --quiet "$service_name"; then
-        return 1
-    fi
-    
-    local service_file="/etc/systemd/system/${service_name}.service"
-    if [ ! -f "$service_file" ]; then
-        return 1
-    fi
-    
-    # 从服务文件中读取配置行
-    local exec_line=$(grep "ExecStart=" "$service_file")
-    if [ -z "$exec_line" ]; then
-        return 1
-    fi
-    
-    # 提取配置信息
-    local tls_domain=$(echo "$exec_line" | grep -o -- "--tls [^ ]*" | cut -d' ' -f2)
-    local password=$(echo "$exec_line" | grep -o -- "--password [^ ]*" | cut -d' ' -f2)
-    local listen_part=$(echo "$exec_line" | grep -o -- "--listen [^ ]*" | cut -d' ' -f2)
-    local listen_port=$(echo "$listen_part" | grep -o '[0-9]*$')
-    
-    if [ -z "$tls_domain" ] || [ -z "$password" ] || [ -z "$listen_port" ]; then
-        return 1
-    fi
-    
-    echo "${password}|${tls_domain}|${listen_port}"
-    return 0
-}
-
 # 初始检查
 initial_check() {
     check_root
-    check_curl
-    check_bc
+    # bc：状态里的 CPU / 内存合计
+    ensure_cmds curl bc || exit 1
     check_and_migrate_config
     # 旧的单版本布局迁到按通道分开存；已经是新布局时什么都不做
     if [ -e "${INSTALL_DIR}/snell-server" ]; then
@@ -3362,17 +4041,22 @@ initial_check() {
 # 运行初始检查
 initial_check
 
+# 下载子脚本到临时文件，校验通过后再执行
+run_remote_script() {   # <url> <名称>
+    local tmp_script
+    tmp_script=$(mktemp) || return 1
+    if fetch_verified_script "$1" "$tmp_script"; then
+        bash "$tmp_script"
+    else
+        echo -e "${RED}${2}下载校验失败，已取消执行。${RESET}"
+    fi
+    rm -f "$tmp_script"
+}
+
 # 多用户管理
 setup_multi_user() {
     echo -e "${CYAN}正在执行多用户管理脚本...${RESET}"
-    local tmp_script
-    tmp_script=$(mktemp)
-    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/multi-user.sh" "$tmp_script"; then
-        bash "$tmp_script"
-    else
-        echo -e "${RED}多用户管理脚本下载校验失败，已取消执行。${RESET}"
-    fi
-    rm -f "$tmp_script"
+    run_remote_script "${SNELL_RAW_BASE}/multi-user.sh" "多用户管理脚本"
 
     # 多用户管理脚本执行完毕后会自动返回这里
     echo -e "${GREEN}多用户管理操作完成${RESET}"
@@ -3394,6 +4078,7 @@ show_menu() {
     echo -e "${GREEN}作者: jinqian${RESET}"
     echo -e "${GREEN}网站：https://jinqians.com${RESET}"
     echo -e "${CYAN}============================================${RESET}"
+    
 
     # 显示服务状态
     check_and_show_status
@@ -3404,9 +4089,10 @@ show_menu() {
     _menu_row "3." "查看配置" 11 "9." "更新脚本"
     _menu_row "4." "重启服务" 11 "10." "查看服务状态"
     _menu_row "5." "ShadowTLS 管理" 5 "11." "Snell v5/v6 出口控制设置"
-    _menu_row "6." "BBR 管理" 11 "0." "退出脚本"
+    _menu_row "6." "BBR 管理" 11 "12." "规则分流（sing-box：广告 / 大陆 / AI / 流媒体… 走不同出口）"
+    echo -e "${GREEN}  0.${RESET} 退出脚本"
     echo -e "${CYAN}--------------------------------------------${RESET}"
-    if ! read -rp "请输入选项 [0-11]: " num; then
+    if ! read -rp "请输入选项 [0-12]: " num; then
         echo
         echo -e "${YELLOW}未读取到输入，已退出 Snell 菜单。${RESET}"
         exit 0
@@ -3418,14 +4104,7 @@ setup_bbr() {
     echo -e "${CYAN}正在获取并执行 BBR 管理脚本...${RESET}"
 
     # 下载到本地校验通过后再执行
-    local tmp_script
-    tmp_script=$(mktemp)
-    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/bbr.sh" "$tmp_script"; then
-        bash "$tmp_script"
-    else
-        echo -e "${RED}BBR 脚本下载校验失败，已取消执行。${RESET}"
-    fi
-    rm -f "$tmp_script"
+    run_remote_script "${SNELL_RAW_BASE}/bbr.sh" "BBR 脚本"
 
     # BBR 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}BBR 管理操作完成${RESET}"
@@ -3435,55 +4114,11 @@ setup_bbr() {
 # ShadowTLS管理
 setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
-    local tmp_script
-    tmp_script=$(mktemp)
-    if fetch_verified_script "https://raw.githubusercontent.com/jinqians/snell.sh/main/shadowtls.sh" "$tmp_script"; then
-        bash "$tmp_script"
-    else
-        echo -e "${RED}ShadowTLS 脚本下载校验失败，已取消执行。${RESET}"
-    fi
-    rm -f "$tmp_script"
+    run_remote_script "${SNELL_RAW_BASE}/shadowtls.sh" "ShadowTLS 脚本"
 
     # ShadowTLS 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"
     sleep 1  # 给用户一点时间看到提示
-}
-
-# 获取 Snell 端口
-get_snell_port() {
-    if [ -f "${SNELL_CONF_DIR}/users/snell-main.conf" ]; then
-        grep -E '^listen' "${SNELL_CONF_DIR}/users/snell-main.conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p'
-    fi
-}
-
-# 获取所有 Snell 用户配置
-get_all_snell_users() {
-    # 检查用户配置目录是否存在
-    if [ ! -d "${SNELL_CONF_DIR}/users" ]; then
-        return 1
-    fi
-    
-    # 首先获取主用户配置
-    local main_port=""
-    local main_psk=""
-    if [ -f "${SNELL_CONF_DIR}/users/snell-main.conf" ]; then
-        main_port=$(grep -E '^listen' "${SNELL_CONF_DIR}/users/snell-main.conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
-        main_psk=$(grep -E '^psk' "${SNELL_CONF_DIR}/users/snell-main.conf" | awk -F'=' '{print $2}' | tr -d ' ')
-        if [ ! -z "$main_port" ] && [ ! -z "$main_psk" ]; then
-            echo "${main_port}|${main_psk}"
-        fi
-    fi
-    
-    # 获取其他用户配置
-    for user_conf in "${SNELL_CONF_DIR}/users"/snell-*.conf; do
-        if [ -f "$user_conf" ] && [[ "$user_conf" != *"snell-main.conf" ]]; then
-            local port=$(grep -E '^listen' "$user_conf" | sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p')
-            local psk=$(grep -E '^psk' "$user_conf" | awk -F'=' '{print $2}' | tr -d ' ')
-            if [ ! -z "$port" ] && [ ! -z "$psk" ]; then
-                echo "${port}|${psk}"
-            fi
-        fi
-    done
 }
 
 # 主循环
@@ -3525,12 +4160,15 @@ while true; do
             configure_v5_egress_control
             read -p "按任意键继续..." || exit 0
             ;;
+        12)
+            router_menu
+            ;;
         0)
             echo -e "${GREEN}感谢使用，再见！${RESET}"
             exit 0
             ;;
         *)
-            echo -e "${RED}请输入正确的选项 [0-11]${RESET}"
+            echo -e "${RED}请输入正确的选项 [0-12]${RESET}"
             ;;
     esac
     echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"

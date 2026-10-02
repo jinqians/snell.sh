@@ -213,6 +213,7 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 | 多用户 | 单机多端口 / 多 PSK，独立增删改查，每个用户可单独选版本 |
 | BBR | 一键开启 BBR 拥塞控制 |
 | 出口控制 | Snell v5 / v6 的 `egress-interface` 设置 |
+| **规则分流** | 服务端仍是官方 snell-server，它连出去的流量按规则集（广告、中国大陆、AI、流媒体…）直连 / 拒绝 / 交给另一个出口（SOCKS5 / HTTP / Shadowsocks / WireGuard），由 sing-box 完成（脚本方式，systemd） |
 | 自动更新 | 脚本内置自更新；镜像由 GitHub Actions 每周跟随上游发布 |
 | 客户端配置输出 | 脚本与容器都会自动生成 Surge 格式配置，含国家/地区标识 |
 
@@ -223,24 +224,34 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 <summary><b>仓库结构</b>（点击展开）</summary>
 
 ```
-snell.sh            # Debian / Ubuntu 主脚本（安装、管理、更新）
-snell-centos.sh     # CentOS / RHEL 脚本
-snell-alpine.sh     # Alpine 3.18 脚本
-snell-docker.sh     # Alpine 本地构建 Docker 方案
-shadowtls.sh        # ShadowTLS v3 管理
-multi-user.sh       # Snell 多用户管理
-menu.sh             # 统一管理菜单（Snell / SS-2022 / ShadowTLS 等）
-bbr.sh              # BBR 管理
-install.sh          # 自动识别系统的安装入口
-Dockerfile          # 多架构镜像构建
-entrypoint.sh       # 容器入口：生成配置 + 输出客户端配置
+src/                    # 源代码：改这里
+  snell.sh              #   Debian / Ubuntu / CentOS / RHEL 主脚本（安装、管理、更新）
+  multi-user.sh         #   Snell 多用户管理
+  shadowtls.sh          #   ShadowTLS v3 管理
+  menu.sh               #   统一管理菜单（Snell / SS-2022 / ShadowTLS 等）
+  snell-alpine.sh       #   Alpine 3.18 原生安装（POSIX sh）
+  snell-docker.sh       #   Docker 方案（POSIX sh）
+  lib/                  #   各脚本共用的部分，每个函数只有一份
+    common.sh           #     颜色、root 检查、识别系统与包管理器（apt / dnf / yum / apk）、发布地址
+    release.sh          #     Snell 官方版本号与下载地址
+    netinfo.sh          #     公网地址与所在国家
+    firewall.sh         #     开放 / 关闭端口：firewalld、ufw、iptables + ip6tables、nftables
+    channels.sh         #     安装布局与 v4 / v5 / v6 多版本共存
+    conf.sh             #     用户配置、v6 参数、Surge 配置行
+tools/build.sh          # 把 src/ 合成根目录下的单文件脚本（--check 只检查是否一致）
+snell.sh  snell-centos.sh  multi-user.sh  shadowtls.sh  menu.sh  snell-alpine.sh  snell-docker.sh
+                        # ↑ 生成的发布文件（snell-centos.sh 与 snell.sh 相同），不要直接改
+bbr.sh                  # BBR 管理
+install.sh              # 自动识别系统的安装入口
+Dockerfile              # 多架构镜像构建
+entrypoint.sh           # 容器入口：生成配置 + 输出客户端配置
 build-docker-images.sh  # 本地批量构建镜像
-surge.conf          # Surge 参考配置文件
+surge.conf              # Surge 参考配置文件
 ```
 
-> ⚠️ 根目录脚本的路径不要变动：服务端已安装的脚本通过
-> `https://raw.githubusercontent.com/jinqians/snell.sh/main/<脚本名>.sh` 自更新，
-> `*.jinqians.com` 短域名也指向这些固定路径，移动文件会导致存量用户的自动更新失效。
+> ⚠️ 根目录脚本的路径不要变动：服务端已安装的脚本通过 `*.jinqians.com` 短域名或
+> `https://raw.githubusercontent.com/jinqians/snell.sh/main/<脚本名>.sh` 自更新，PSM 也直接调用根目录的 `snell.sh`。
+> 所以源代码在 `src/`，根目录放 `bash tools/build.sh` 生成的单文件（`bash <(curl …)` 只能下载一个文件）。
 
 ---
 
@@ -261,7 +272,7 @@ sh -c "$(curl -fsSL https://install.jinqians.com)"
 #### 2. 多功能管理菜单（推荐 Debian / Ubuntu）
 
 ```bash
-bash <(curl -L -s menu.jinqians.com)
+bash <(curl -fsSL https://menu.jinqians.com)
 ```
 
 安装后输入 `menu` 即可再次进入：
@@ -323,8 +334,8 @@ mode = default
 
 | 系统 | 命令 |
 |------|------|
-| Debian / Ubuntu | `bash <(curl -L -s snell.jinqians.com)` |
-| CentOS / RHEL | `bash <(curl -L -s snell-centos.jinqians.com)` |
+| Debian / Ubuntu | `bash <(curl -fsSL https://snell.jinqians.com)` |
+| CentOS / RHEL / Rocky / AlmaLinux | `bash <(curl -fsSL https://snell.jinqians.com)`（与 Debian 同一个脚本；旧的 `snell-centos.jinqians.com` 仍可用） |
 | Alpine（Docker 本地构建） | `sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"` |
 | Alpine 3.18 及以下（原生安装） | `sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"` |
 
@@ -373,12 +384,13 @@ rc-service docker start
 Snell 主脚本菜单：
 
 ```
-1.  安装 Snell   7.  多用户管理
-2.  卸载 Snell   8.  版本管理（更新 / 追加通道 / 切换通道）
-3.  查看配置     9.  更新脚本
-4.  重启服务     10. 查看服务状态
+1.  安装 Snell      7.  多用户管理
+2.  卸载 Snell      8.  版本管理（更新 / 追加通道 / 切换通道）
+3.  查看配置        9.  更新脚本
+4.  重启服务        10. 查看服务状态
 5.  ShadowTLS 管理  11. Snell v5/v6 出口控制设置
-6.  BBR 管理     0.  退出脚本
+6.  BBR 管理        12. 规则分流（sing-box：广告 / 大陆 / AI / 流媒体… 走不同出口）
+0.  退出脚本
 ```
 
 安装完成后选择 **3. 查看配置**，脚本会输出带国家/地区标识的 Surge 配置，直接复制即可：
@@ -397,6 +409,38 @@ HK = snell, 1.2.3.4, 57891, psk = xxxxxxxxxxxx, version = 5, reuse = true, tfo =
 版本: Snell v6
 HK = snell, 1.2.3.4, 7000, psk = yyyyyyyyyyyy, version = 6, mode = default, reuse = true, tfo = true
 ```
+
+#### 5. 规则分流（sing-box）
+
+Snell 服务端照旧是**官方 snell-server**，不换成 sing-box / open-snell 之类的第三方实现；
+分流作用在它**连出去的流量**上：客户端经 Snell 访问的网站，按规则直连、拒绝，或者从另一个出口出去
+（比如家宽 SOCKS5、WARP）。主菜单 `12. 规则分流`：
+
+1. （可选）`4. 添加出口`：SOCKS5、HTTP 代理、Shadowsocks，或 WireGuard（WARP 填 wgcf 等工具生成的参数）。
+2. `2. 添加规则`：先选匹配什么，再选去哪（拒绝 / 直连 / 某个出口）。预设有：
+
+   | 预设 | 规则集 |
+   |------|--------|
+   | 广告与跟踪 | geosite `category-ads-all` |
+   | 中国大陆的网站与 IP | geosite `cn` + geoip `cn`（常用来拒绝「回国」流量） |
+   | 内网与局域网地址 | 私有地址段（防止客户端借服务器访问内网、云厂商的元数据接口） |
+   | BT 下载 | 按协议识别 |
+   | AI | geosite `openai`、`anthropic`、`google-gemini`、`perplexity` |
+   | 流媒体 | geosite `netflix`、`disney`、`hbo`、`primevideo`、`hulu` |
+
+   也可以填任意 geosite 分类、geoip 国家、域名后缀、IP 段，或一个远程规则集（sing-box `.srs`）地址。
+   规则集来自 SagerNet/sing-geosite、sing-geoip，每天自动更新。规则从上往下匹配，都不匹配的直连。
+3. `1. 启用`。之后改规则、出口立即生效；`7. 停用` 恢复全部直连（规则保留）。
+
+原理：nftables 只拦 **snell 用户**（Snell 的各个服务都以它运行）新发起的连接——TCP 重定向、UDP 用
+TPROXY——交给本机一个 sing-box（官方 1.14.2，装在 `/usr/local/bin/snell-router`，不影响机器上别的
+sing-box），sing-box 从 TLS SNI / HTTP Host / QUIC 识别出域名再按规则选出口。
+
+- 回给客户端的流量、本机其他程序（包括 root）的流量、Snell 自己的 DNS 查询都**不经过**分流。
+- sing-box 停止或崩溃时拦截规则随之撤掉，Snell 回到直连，不会断网；systemd 会把它重新拉起。
+- 和「出口控制（netns）」二选一：那种模式下 Snell 的流量不在本机发起，拦不到。
+- PSM 装的 Snell 以 root 运行：启用分流时给它加一个 systemd drop-in 改为 snell 用户（原服务文件不动），停用时撤掉。
+- 卸载 Snell 时分流的服务、配置和 sing-box 一起删除。
 
 ### 二、Docker 部署
 

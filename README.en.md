@@ -10,7 +10,7 @@
 
 Install and manage Snell v4 / v5 / v6 with one command — with ShadowTLS v3,
 multi-user support and BBR, plus multi-arch Docker images that print the client
-config on every start.
+config on first start.
 
 [English](README.en.md) ｜ [中文](README.md) ｜ [Author's site](https://jinqians.com)
 
@@ -119,7 +119,7 @@ docker run -d --name snell-shadowtls --restart unless-stopped \
   -v ./snell-config:/etc/snell \
   jinqians/snell-server:v5
 
-docker logs snell-shadowtls     # PSK and ShadowTLS password are both there
+docker logs snell-shadowtls     # the first start's log has the PSK and ShadowTLS password
 ```
 
 *Option C (docker compose)*:
@@ -207,6 +207,7 @@ Capabilities:
 | Multi-user | Multiple ports / PSKs on one host, managed separately; each user picks its own version |
 | BBR | One-click BBR congestion control |
 | Egress control | `egress-interface` setting for Snell v5 / v6 |
+| **Rule-based routing** | the server stays the official snell-server; its outgoing traffic goes direct, is rejected, or leaves through another exit (SOCKS5 / HTTP / Shadowsocks / WireGuard) by rule sets (ads, mainland China, AI, streaming…), done by sing-box (scripts, systemd) |
 | Auto update | Scripts self-update; images track upstream weekly via GitHub Actions |
 | Client config output | Both scripts and containers emit Surge-format config, with country tags |
 
@@ -218,25 +219,35 @@ Capabilities:
 <summary><b>Repository layout</b> (click to expand)</summary>
 
 ```
-snell.sh            # Debian / Ubuntu main script (install, manage, update)
-snell-centos.sh     # CentOS / RHEL script
-snell-alpine.sh     # Alpine 3.18 script
-snell-docker.sh     # Alpine local Docker build
-shadowtls.sh        # ShadowTLS v3 management
-multi-user.sh       # Snell multi-user management
-menu.sh             # All-in-one menu (Snell / SS-2022 / ShadowTLS ...)
-bbr.sh              # BBR management
-install.sh          # Distro-detecting installer entry
-Dockerfile          # Multi-arch image build
-entrypoint.sh       # Entrypoint: generate config + print client config
-build-docker-images.sh  # Local batch image build
-surge.conf          # Surge reference config
+src/                    # the source: edit here
+  snell.sh              #   main script for Debian / Ubuntu / CentOS / RHEL (install, manage, update)
+  multi-user.sh         #   Snell multi-user management
+  shadowtls.sh          #   ShadowTLS v3 management
+  menu.sh               #   all-in-one menu (Snell / SS-2022 / ShadowTLS ...)
+  snell-alpine.sh       #   native install on Alpine 3.18 (POSIX sh)
+  snell-docker.sh       #   Docker install (POSIX sh)
+  lib/                  #   what the scripts share, one copy of each function
+    common.sh           #     colours, root check, distro and package manager (apt / dnf / yum / apk), download URLs
+    release.sh          #     official Snell versions and download links
+    netinfo.sh          #     public address and its country
+    firewall.sh         #     open / close ports: firewalld, ufw, iptables + ip6tables, nftables
+    channels.sh         #     install layout and side-by-side v4 / v5 / v6
+    conf.sh             #     user configs, v6 options, Surge lines
+tools/build.sh          # bundles src/ into the single-file scripts in the root (--check: verify only)
+snell.sh  snell-centos.sh  multi-user.sh  shadowtls.sh  menu.sh  snell-alpine.sh  snell-docker.sh
+                        # ↑ generated release files (snell-centos.sh is snell.sh); do not edit them
+bbr.sh                  # BBR management
+install.sh              # distro-detecting installer entry
+Dockerfile              # multi-arch image build
+entrypoint.sh           # entrypoint: generate config + print client config
+build-docker-images.sh  # local batch image build
+surge.conf              # Surge reference config
 ```
 
-> ⚠️ Do not move the scripts out of the repository root: installed copies self-update from
-> `https://raw.githubusercontent.com/jinqians/snell.sh/main/<script>.sh`, and the
-> `*.jinqians.com` short domains point at those fixed paths — moving them would break
-> auto-update for existing users.
+> ⚠️ Do not move the scripts out of the repository root: installed copies self-update through
+> the `*.jinqians.com` short domains or `https://raw.githubusercontent.com/jinqians/snell.sh/main/<script>.sh`,
+> and PSM runs the root `snell.sh` directly. So the source lives in `src/` and the root holds the
+> single files `bash tools/build.sh` generates (`bash <(curl …)` can only fetch one file).
 
 ---
 
@@ -255,7 +266,7 @@ sh -c "$(curl -fsSL https://install.jinqians.com)"
 #### b. All-in-one menu (recommended on Debian / Ubuntu)
 
 ```bash
-bash <(curl -L -s menu.jinqians.com)
+bash <(curl -fsSL https://menu.jinqians.com)
 ```
 
 After installation, type `menu` to reopen it:
@@ -275,8 +286,8 @@ After installation, type `menu` to reopen it:
 
 | System | Command |
 |--------|---------|
-| Debian / Ubuntu | `bash <(curl -L -s snell.jinqians.com)` |
-| CentOS / RHEL | `bash <(curl -L -s snell-centos.jinqians.com)` |
+| Debian / Ubuntu | `bash <(curl -fsSL https://snell.jinqians.com)` |
+| CentOS / RHEL / Rocky / AlmaLinux | `bash <(curl -fsSL https://snell.jinqians.com)` (the same script as Debian; the old `snell-centos.jinqians.com` still works) |
 | Alpine (local Docker build) | `sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"` |
 | Alpine 3.18 and older (native install) | `sh -c "$(curl -fsSL https://snell-alpine.jinqians.com)"` |
 
@@ -324,11 +335,13 @@ The `snell-docker.jinqians.com` script (v1.4+) applies this fix automatically.
 Snell script menu:
 
 ```
-=== Basics ===          === Extras ===           === System ===
-1. Install Snell         5. ShadowTLS             8.  Version management
-2. Uninstall Snell       6. BBR                   9.  Update script
-3. Show config           7. Multi-user            10. Service status
-4. Restart service                                11. v5/v6 egress control
+1.  Install Snell      7.  Multi-user
+2.  Uninstall Snell    8.  Version management (update / add channel / switch channel)
+3.  Show config        9.  Update script
+4.  Restart service    10. Service status
+5.  ShadowTLS          11. v5/v6 egress control
+6.  BBR                12. Rule-based routing (sing-box)
+0.  Exit
 ```
 
 Pick **3. Show config** after installing and the script prints a Surge config with a
@@ -397,6 +410,34 @@ spot, and no other port is touched.
 Alpine / CentOS scripts and the Docker path do not support side-by-side versions on one
 host — for containers, run one container per version instead.
 
+#### Rule-based routing (sing-box)
+
+The server stays the **official snell-server** — not sing-box or open-snell or any other
+reimplementation. Routing applies to **the connections it makes**: the sites clients reach through
+Snell go direct, are rejected, or leave through another exit (a residential SOCKS5, WARP …).
+Main menu `12. Rule-based routing`:
+
+1. (optional) `4. Add an exit`: SOCKS5, HTTP proxy, Shadowsocks, or WireGuard (for WARP, the values wgcf and similar tools generate).
+2. `2. Add a rule`: what to match, then where it goes (reject / direct / an exit). Presets: ads and
+   trackers (geosite `category-ads-all`); mainland China sites and IPs (geosite `cn` + geoip `cn`);
+   private and LAN addresses (so clients cannot reach the server's network or the cloud metadata
+   endpoint through it); BitTorrent; AI (`openai`, `anthropic`, `google-gemini`, `perplexity`);
+   streaming (`netflix`, `disney`, `hbo`, `primevideo`, `hulu`). Or any geosite category, geoip
+   country, domain suffix, IP range, or a remote sing-box `.srs` rule set. Rule sets come from
+   SagerNet/sing-geosite and sing-geoip and update daily. Rules match top to bottom; anything else goes direct.
+3. `1. Enable`. Changes to rules and exits apply at once; `7. Disable` sends everything direct again (the rules are kept).
+
+How: nftables catches the new connections of the **snell user** (every Snell service runs as it) —
+TCP redirected, UDP by TPROXY — and hands them to a local sing-box (official 1.14.2, installed as
+`/usr/local/bin/snell-router`, leaving any other sing-box alone), which reads the domain from the TLS
+SNI / HTTP Host / QUIC and picks the exit.
+
+- Replies to clients, other programs on the machine (root included) and Snell's own DNS lookups are **not** routed.
+- If sing-box stops or crashes the interception goes with it and Snell is direct again — never cut off; systemd restarts it.
+- Not together with egress control (netns): there Snell's traffic does not originate on the host.
+- A Snell installed by PSM runs as root: enabling routing adds a systemd drop-in that runs it as the snell user (PSM's unit file untouched), removed again on disable.
+- Uninstalling Snell removes the routing service, its config and its sing-box too.
+
 ### 2. Docker
 
 Image: [`jinqians/snell-server`](https://hub.docker.com/r/jinqians/snell-server)
@@ -421,6 +462,10 @@ Architectures: v4 / v5 ship `amd64`, `arm64`, `armv7`; v6 has no upstream armv7 
 > reboot and every container goes offline.
 
 #### a. Snell only
+
+> The container runs as the unprivileged user `nobody` (uid 65534), so a mounted config
+> directory must be writable by it, or the entrypoint can't generate the config. Run once
+> before starting: `mkdir -p ./snell-config && chown -R 65534:65533 ./snell-config`
 
 ```bash
 docker run -d --name snell-server \
@@ -604,7 +649,7 @@ docker compose down                   # stop and remove
 
 ### 4. Viewing the client config
 
-**Every** container start prints a Surge-ready config to the log — no manual assembly:
+The **first** container start (when the config is generated) prints a Surge-ready config to the log — no manual assembly. Later restarts don't print the PSK in plain text:
 
 ```bash
 docker logs snell-server              # started with docker run
@@ -639,7 +684,8 @@ cat ./snell-config/shadowtls-password     # ShadowTLS password
 
 > - The server address comes from an automatic public-IP probe; on failure a placeholder is printed — set `SNELL_SERVER_IP` to override.
 > - The port shown is the container's listening port; replace it if the host maps a different one.
-> - Logs contain the PSK and ShadowTLS password — do not share them publicly.
+> - The first start's log contains the PSK and ShadowTLS password — do not share it publicly; later restarts don't log the PSK.
+> - You can always view the full client config with `docker exec <container> cat /etc/snell/client-config.txt`.
 
 ### 5. Environment variables
 
