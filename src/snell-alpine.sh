@@ -15,7 +15,7 @@ SNELL_LIB="${SNELL_LIB:-$(cd "$(dirname "$0")" && pwd)/lib}"  # @dev
 BLUE='\033[0;34m'
 
 # --- 脚本版本号 ---
-current_version="2.5"
+current_version="2.6"
 
 # --- 全局变量 ---
 SNELL_VERSION_CHOICE=""
@@ -544,6 +544,10 @@ show_menu() {
 
 check_root
 check_system
+# 旧版写的 snell 命令直连 raw.githubusercontent.com 上的固定路径，换成走短域名的新写法
+if [ -f /usr/local/bin/snell ] && grep -q 'raw.githubusercontent.com/jinqians/snell.sh/' /usr/local/bin/snell 2>/dev/null; then
+    create_management_script
+fi
 
 while true; do
     show_menu

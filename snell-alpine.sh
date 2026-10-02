@@ -18,7 +18,9 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-# 脚本的发布地址。短域名（*.jinqians.com）重定向到同一批文件；
+# 脚本的发布地址。短域名（*.jinqians.com）由 Cloudflare 重定向到仓库里的文件：
+# snell / snell-centos / snell-alpine → 根目录，menu / snell-docker / install → scripts/。
+# 菜单里调用的子脚本从 SNELL_RAW_BASE 下的 scripts/、docker/ 取。
 # 脚本自身的更新与管理命令走短域名，运行才会被统计到。
 # 可以用同名环境变量换成镜像地址（测试时指向本地的文件）。
 SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell.sh/main}"
@@ -558,7 +560,7 @@ show_port_occupier() {   # <port>
 BLUE='\033[0;34m'
 
 # --- 脚本版本号 ---
-current_version="2.5"
+current_version="2.6"
 
 # --- 全局变量 ---
 SNELL_VERSION_CHOICE=""
@@ -1087,6 +1089,10 @@ show_menu() {
 
 check_root
 check_system
+# 旧版写的 snell 命令直连 raw.githubusercontent.com 上的固定路径，换成走短域名的新写法
+if [ -f /usr/local/bin/snell ] && grep -q 'raw.githubusercontent.com/jinqians/snell.sh/' /usr/local/bin/snell 2>/dev/null; then
+    create_management_script
+fi
 
 while true; do
     show_menu

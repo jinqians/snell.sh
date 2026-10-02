@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# 构建上下文是本目录（Dockerfile、entrypoint.sh），从哪里运行都一样
+cd "$(dirname "$0")"
 
 IMAGE_NAME="${IMAGE_NAME:-jinqians/snell-server}"
 LATEST_CHANNEL="${LATEST_CHANNEL:-v5}"

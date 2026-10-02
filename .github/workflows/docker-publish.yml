@@ -197,7 +197,7 @@ jobs:
       - name: Build and push ${{ matrix.channel }} (${{ matrix.version }})
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: docker
           platforms: ${{ matrix.platforms }}
           push: true
           provenance: false
@@ -265,7 +265,7 @@ jobs:
               --cache-to "type=gha,mode=max,scope=${channel}" \
               ${tag_args} \
               --push \
-              .
+              docker
             echo "::endgroup::"
           done
 

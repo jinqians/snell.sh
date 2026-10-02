@@ -16,7 +16,7 @@ SNELL_LIB="${SNELL_LIB:-$(cd "$(dirname "$0")" && pwd)/lib}"  # @dev
 BLUE='\033[0;34m'
 
 # --- 脚本版本号 ---
-current_version="1.5"
+current_version="1.6"
 
 # Snell v6 加密模式：default / unshaped / unsafe-raw（客户端必须与服务端一致）
 SNELL_MODE="default"
@@ -235,12 +235,13 @@ create_dockerfile() {
 
     # 准备 entrypoint.sh：容器首次启动时由它自动生成配置与 PSK，
     # 不再把含明文 PSK 的配置文件烘焙进镜像层
-    if [ -f "${SCRIPT_DIR}/entrypoint.sh" ]; then
-        cp "${SCRIPT_DIR}/entrypoint.sh" ./entrypoint.sh
+    # 从仓库里运行时用本地的 docker/entrypoint.sh（脚本在 scripts/ 下）
+    if [ -f "${SCRIPT_DIR}/../docker/entrypoint.sh" ]; then
+        cp "${SCRIPT_DIR}/../docker/entrypoint.sh" ./entrypoint.sh
         echo -e "${GREEN}✓ 已复用 entrypoint.sh${RESET}"
     else
         echo -e "${CYAN}正在下载 entrypoint.sh...${RESET}"
-        if ! curl -fsSL -o ./entrypoint.sh "${SNELL_RAW_BASE}/entrypoint.sh"; then
+        if ! curl -fsSL -o ./entrypoint.sh "${SNELL_RAW_BASE}/docker/entrypoint.sh"; then
             echo -e "${RED}✗ entrypoint.sh 下载失败${RESET}"
             return 1
         fi

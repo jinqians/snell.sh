@@ -224,6 +224,16 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
 <summary><b>仓库结构</b>（点击展开）</summary>
 
 ```
+README.md  README.en.md  LICENSE  surge.conf
+snell.sh  snell-centos.sh  snell-alpine.sh
+                        # ↑ 生成的发布文件，留在根目录是因为旧版装好的 snell 命令与 PSM
+                        #   直连这三个 raw 地址（snell-centos.sh 与 snell.sh 相同）；不要直接改
+scripts/                # 其余生成的发布文件（短域名 menu / snell-docker / install 重定向到这里）
+  menu.sh  multi-user.sh  shadowtls.sh  bbr.sh  snell-docker.sh  install.sh
+docker/                 # Docker 镜像
+  Dockerfile            #   多架构镜像构建
+  entrypoint.sh         #   容器入口：生成配置 + 输出客户端配置
+  build-docker-images.sh  # 本地批量构建镜像
 src/                    # 源代码：改这里
   snell.sh              #   Debian / Ubuntu / CentOS / RHEL 主脚本（安装、管理、更新）
   multi-user.sh         #   Snell 多用户管理
@@ -231,6 +241,8 @@ src/                    # 源代码：改这里
   menu.sh               #   统一管理菜单（Snell / SS-2022 / ShadowTLS 等）
   snell-alpine.sh       #   Alpine 3.18 原生安装（POSIX sh）
   snell-docker.sh       #   Docker 方案（POSIX sh）
+  bbr.sh                #   BBR 管理
+  install.sh            #   自动识别系统的安装入口
   lib/                  #   各脚本共用的部分，每个函数只有一份
     common.sh           #     颜色、root 检查、识别系统与包管理器（apt / dnf / yum / apk）、发布地址
     release.sh          #     Snell 官方版本号与下载地址
@@ -238,20 +250,15 @@ src/                    # 源代码：改这里
     firewall.sh         #     开放 / 关闭端口：firewalld、ufw、iptables + ip6tables、nftables
     channels.sh         #     安装布局与 v4 / v5 / v6 多版本共存
     conf.sh             #     用户配置、v6 参数、Surge 配置行
-tools/build.sh          # 把 src/ 合成根目录下的单文件脚本（--check 只检查是否一致）
-snell.sh  snell-centos.sh  multi-user.sh  shadowtls.sh  menu.sh  snell-alpine.sh  snell-docker.sh
-                        # ↑ 生成的发布文件（snell-centos.sh 与 snell.sh 相同），不要直接改
-bbr.sh                  # BBR 管理
-install.sh              # 自动识别系统的安装入口
-Dockerfile              # 多架构镜像构建
-entrypoint.sh           # 容器入口：生成配置 + 输出客户端配置
-build-docker-images.sh  # 本地批量构建镜像
-surge.conf              # Surge 参考配置文件
+    routing.sh          #     规则分流（sing-box）
+tools/build.sh          # 把 src/ 合成单文件，写到根目录与 scripts/（--check 只检查是否一致）
+sources/                # Snell v4 官方安装包备份
 ```
 
-> ⚠️ 根目录脚本的路径不要变动：服务端已安装的脚本通过 `*.jinqians.com` 短域名或
-> `https://raw.githubusercontent.com/jinqians/snell.sh/main/<脚本名>.sh` 自更新，PSM 也直接调用根目录的 `snell.sh`。
-> 所以源代码在 `src/`，根目录放 `bash tools/build.sh` 生成的单文件（`bash <(curl …)` 只能下载一个文件）。
+> ⚠️ 根目录的 `snell.sh`、`snell-centos.sh`、`snell-alpine.sh` 不要挪：旧版装好的 `snell` 命令和 PSM
+> 直接从 `https://raw.githubusercontent.com/jinqians/snell.sh/main/<脚本名>.sh` 取脚本，raw 地址没法重定向。
+> 新版会把旧的 `snell` 命令改成走短域名。其余脚本只经短域名或由主脚本调用，挪动时改 Cloudflare 的重定向即可。
+> 源代码在 `src/`，发布的是 `bash tools/build.sh` 生成的单文件（`bash <(curl …)` 只能下载一个文件）。
 
 ---
 
@@ -590,8 +597,8 @@ docker run -d --name snell-server \
 #### 5. 本地构建镜像
 
 ```bash
-./build-docker-images.sh                      # 构建全部通道与版本
-USE_BUILDX=1 PUSH=1 ./build-docker-images.sh  # 多架构构建并推送
+./docker/build-docker-images.sh                      # 构建全部通道与版本
+USE_BUILDX=1 PUSH=1 ./docker/build-docker-images.sh  # 多架构构建并推送
 ```
 
 ### 三、Docker Compose

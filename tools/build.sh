@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 把 src/ 下的脚本连同它们用到的 src/lib 合成单个文件，写到仓库根目录的同名文件。
-# 用户 bash <(curl …) 下载的、短域名重定向到的、PSM 调用的都是根目录这些文件，
-# 地址因此不变；改代码请改 src/，然后重新生成。
+# 把 src/ 下的脚本连同它们用到的 src/lib 合成单个文件（bash <(curl …) 只能下载一个文件）。
+# 根目录只留旧版装好的 snell 命令与 PSM 写死了 raw 地址的三个：snell.sh、snell-centos.sh、
+# snell-alpine.sh；其余放 scripts/，短域名经 Cloudflare 重定向过去。
+# 改代码请改 src/，然后重新生成。
 #
 #   bash tools/build.sh          生成
 #   bash tools/build.sh --check  只检查根目录的文件与 src/ 是否一致（不一致时退出码 1）
@@ -17,11 +18,18 @@ TARGETS=(
     "snell.sh:src/snell.sh"
     # CentOS / RHEL 与 Debian 用同一个脚本；旧的 snell-centos 地址继续可用
     "snell-centos.sh:src/snell.sh"
-    "multi-user.sh:src/multi-user.sh"
-    "shadowtls.sh:src/shadowtls.sh"
-    "menu.sh:src/menu.sh"
     "snell-alpine.sh:src/snell-alpine.sh"
+    "scripts/menu.sh:src/menu.sh"
+    "scripts/multi-user.sh:src/multi-user.sh"
+    "scripts/shadowtls.sh:src/shadowtls.sh"
+    "scripts/bbr.sh:src/bbr.sh"
+    "scripts/snell-docker.sh:src/snell-docker.sh"
+    "scripts/install.sh:src/install.sh"
+    # 过渡：menu / snell-docker / install 三个短域名改指 scripts/ 之前，根目录的旧地址照常可用；
+    # 重定向改好后删掉这三行和根目录的这三个文件
+    "menu.sh:src/menu.sh"
     "snell-docker.sh:src/snell-docker.sh"
+    "install.sh:src/install.sh"
 )
 
 bundle() {   # <源文件> → 标准输出
@@ -60,6 +68,7 @@ for t in "${TARGETS[@]}"; do
             stale=1
         fi
     else
+        mkdir -p "$(dirname "$out")"
         bundle "$src" > "$out.tmp"
         chmod 755 "$out.tmp"
         mv "$out.tmp" "$out"

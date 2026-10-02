@@ -20,7 +20,9 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-# 脚本的发布地址。短域名（*.jinqians.com）重定向到同一批文件；
+# 脚本的发布地址。短域名（*.jinqians.com）由 Cloudflare 重定向到仓库里的文件：
+# snell / snell-centos / snell-alpine → 根目录，menu / snell-docker / install → scripts/。
+# 菜单里调用的子脚本从 SNELL_RAW_BASE 下的 scripts/、docker/ 取。
 # 脚本自身的更新与管理命令走短域名，运行才会被统计到。
 # 可以用同名环境变量换成镜像地址（测试时指向本地的文件）。
 SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell.sh/main}"
@@ -2134,7 +2136,7 @@ router_menu() {
 
 
 #当前版本号
-current_version="6.0"
+current_version="6.1"
 
 # 出口控制（netns + socket activation）默认参数
 EGRESS_FEATURE_ENABLED="false"
@@ -2727,6 +2729,50 @@ start_egress_runtime() {
 }
 
 # 安装 Snell
+# 写管理命令 /usr/local/bin/snell：每次运行都经短域名取最新脚本（地址由 Cloudflare 重定向，
+# 脚本在仓库里换位置也不用改这里）
+write_management_script() {
+    mkdir -p /usr/local/bin
+    cat > /usr/local/bin/snell << 'EOFSCRIPT'
+#!/bin/bash
+
+# 定义颜色代码
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+# 检查是否以 root 权限运行
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${RED}请以 root 权限运行此脚本${RESET}"
+    exit 1
+fi
+
+# 下载并执行最新版本的脚本（带完整性校验：传输失败即停、非空、语法检查）
+echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
+TMP_SCRIPT=$(mktemp)
+if curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 https://snell.jinqians.com -o "$TMP_SCRIPT" \
+    && [ -s "$TMP_SCRIPT" ] && bash -n "$TMP_SCRIPT" 2>/dev/null; then
+    bash "$TMP_SCRIPT"
+    rm -f "$TMP_SCRIPT"
+else
+    echo -e "${RED}下载或校验脚本失败，请检查网络连接。${RESET}"
+    rm -f "$TMP_SCRIPT"
+    exit 1
+fi
+EOFSCRIPT
+    chmod +x /usr/local/bin/snell
+}
+
+# 旧版写的管理命令直连 raw.githubusercontent.com 上的固定路径（snell.sh / snell-centos.sh），
+# 换成走短域名的新写法；不是本脚本写的文件不动
+upgrade_management_script() {
+    [ -f /usr/local/bin/snell ] || return 0
+    grep -q 'raw.githubusercontent.com/jinqians/snell.sh/' /usr/local/bin/snell 2>/dev/null || return 0
+    write_management_script && echo -e "${GREEN}已更新 snell 管理命令（改为经 snell.jinqians.com 获取最新脚本）${RESET}"
+}
+
 # 读主配置里 key = value 的值（取第一个 = 之后的全部，base64 PSK 里的 = 不会被截掉）
 main_conf_value() {
     grep -E "^[[:space:]]*$1[[:space:]]*=" "$SNELL_CONF_FILE" 2>/dev/null | head -n 1 \
@@ -2963,51 +3009,10 @@ install_snell() {
 
     # 创建管理脚本
     echo -e "${CYAN}正在安装管理脚本...${RESET}"
-    
-    # 确保目标目录存在
-    mkdir -p /usr/local/bin
-    
-    # 创建管理脚本
-    cat > /usr/local/bin/snell << 'EOFSCRIPT'
-#!/bin/bash
-
-# 定义颜色代码
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-RESET='\033[0m'
-
-# 检查是否以 root 权限运行
-if [ "$(id -u)" != "0" ]; then
-    echo -e "${RED}请以 root 权限运行此脚本${RESET}"
-    exit 1
-fi
-
-# 下载并执行最新版本的脚本（带完整性校验：传输失败即停、非空、语法检查）
-echo -e "${CYAN}正在获取最新版本的管理脚本...${RESET}"
-TMP_SCRIPT=$(mktemp)
-if curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 https://snell.jinqians.com -o "$TMP_SCRIPT" \
-    && [ -s "$TMP_SCRIPT" ] && bash -n "$TMP_SCRIPT" 2>/dev/null; then
-    bash "$TMP_SCRIPT"
-    rm -f "$TMP_SCRIPT"
-else
-    echo -e "${RED}下载或校验脚本失败，请检查网络连接。${RESET}"
-    rm -f "$TMP_SCRIPT"
-    exit 1
-fi
-EOFSCRIPT
-    
-    if [ $? -eq 0 ]; then
-        chmod +x /usr/local/bin/snell
-        if [ $? -eq 0 ]; then
-            echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
-            echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}"
-            echo -e "${YELLOW}注意：需要使用 sudo snell 或以 root 身份运行。${RESET}\n"
-        else
-            echo -e "\n${RED}设置脚本执行权限失败。${RESET}"
-            echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
-        fi
+    if write_management_script; then
+        echo -e "\n${GREEN}管理脚本安装成功！${RESET}"
+        echo -e "${YELLOW}您可以在终端输入 'snell' 进入管理菜单。${RESET}"
+        echo -e "${YELLOW}注意：需要使用 sudo snell 或以 root 身份运行。${RESET}\n"
     else
         echo -e "\n${RED}创建管理脚本失败。${RESET}"
         echo -e "${YELLOW}您可以通过直接运行原脚本来管理 Snell。${RESET}\n"
@@ -4035,6 +4040,7 @@ initial_check() {
         migrate_snell_binary_layout
     fi
     sync_existing_main_service_unit
+    upgrade_management_script
     check_and_show_status
 }
 
@@ -4056,7 +4062,7 @@ run_remote_script() {   # <url> <名称>
 # 多用户管理
 setup_multi_user() {
     echo -e "${CYAN}正在执行多用户管理脚本...${RESET}"
-    run_remote_script "${SNELL_RAW_BASE}/multi-user.sh" "多用户管理脚本"
+    run_remote_script "${SNELL_RAW_BASE}/scripts/multi-user.sh" "多用户管理脚本"
 
     # 多用户管理脚本执行完毕后会自动返回这里
     echo -e "${GREEN}多用户管理操作完成${RESET}"
@@ -4104,7 +4110,7 @@ setup_bbr() {
     echo -e "${CYAN}正在获取并执行 BBR 管理脚本...${RESET}"
 
     # 下载到本地校验通过后再执行
-    run_remote_script "${SNELL_RAW_BASE}/bbr.sh" "BBR 脚本"
+    run_remote_script "${SNELL_RAW_BASE}/scripts/bbr.sh" "BBR 脚本"
 
     # BBR 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}BBR 管理操作完成${RESET}"
@@ -4114,7 +4120,7 @@ setup_bbr() {
 # ShadowTLS管理
 setup_shadowtls() {
     echo -e "${CYAN}正在执行 ShadowTLS 管理脚本...${RESET}"
-    run_remote_script "${SNELL_RAW_BASE}/shadowtls.sh" "ShadowTLS 脚本"
+    run_remote_script "${SNELL_RAW_BASE}/scripts/shadowtls.sh" "ShadowTLS 脚本"
 
     # ShadowTLS 脚本执行完毕后会自动返回这里
     echo -e "${GREEN}ShadowTLS 管理操作完成${RESET}"

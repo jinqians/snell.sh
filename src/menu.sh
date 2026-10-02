@@ -14,7 +14,7 @@ SNELL_LIB="${SNELL_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib}"  # @
 . "$SNELL_LIB/routing.sh"   # @bundle
 
 # 当前版本号
-current_version="4.5"
+current_version="4.6"
 
 # systemd 服务目录
 SYSTEMD_DIR="/etc/systemd/system"
@@ -281,7 +281,7 @@ manage_mainland_block() {
 
 # 安装/管理 ShadowTLS
 manage_shadowtls() {
-    bash <(curl -fsSL "${SNELL_RAW_BASE}/shadowtls.sh")
+    bash <(curl -fsSL "${SNELL_RAW_BASE}/scripts/shadowtls.sh")
 }
 
 # 安装/管理 VLESS Reality（已整合到 PSM）

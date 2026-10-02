@@ -219,6 +219,16 @@ Capabilities:
 <summary><b>Repository layout</b> (click to expand)</summary>
 
 ```
+README.md  README.en.md  LICENSE  surge.conf
+snell.sh  snell-centos.sh  snell-alpine.sh
+                        # ↑ generated release files, kept in the root because older installs' snell
+                        #   command and PSM fetch these raw URLs (snell-centos.sh is snell.sh); do not edit them
+scripts/                # the other generated release files (the menu / snell-docker / install short domains redirect here)
+  menu.sh  multi-user.sh  shadowtls.sh  bbr.sh  snell-docker.sh  install.sh
+docker/                 # Docker image
+  Dockerfile            #   multi-arch image build
+  entrypoint.sh         #   entrypoint: generate config + print client config
+  build-docker-images.sh  # local batch image build
 src/                    # the source: edit here
   snell.sh              #   main script for Debian / Ubuntu / CentOS / RHEL (install, manage, update)
   multi-user.sh         #   Snell multi-user management
@@ -226,6 +236,8 @@ src/                    # the source: edit here
   menu.sh               #   all-in-one menu (Snell / SS-2022 / ShadowTLS ...)
   snell-alpine.sh       #   native install on Alpine 3.18 (POSIX sh)
   snell-docker.sh       #   Docker install (POSIX sh)
+  bbr.sh                #   BBR management
+  install.sh            #   distro-detecting installer entry
   lib/                  #   what the scripts share, one copy of each function
     common.sh           #     colours, root check, distro and package manager (apt / dnf / yum / apk), download URLs
     release.sh          #     official Snell versions and download links
@@ -233,21 +245,16 @@ src/                    # the source: edit here
     firewall.sh         #     open / close ports: firewalld, ufw, iptables + ip6tables, nftables
     channels.sh         #     install layout and side-by-side v4 / v5 / v6
     conf.sh             #     user configs, v6 options, Surge lines
-tools/build.sh          # bundles src/ into the single-file scripts in the root (--check: verify only)
-snell.sh  snell-centos.sh  multi-user.sh  shadowtls.sh  menu.sh  snell-alpine.sh  snell-docker.sh
-                        # ↑ generated release files (snell-centos.sh is snell.sh); do not edit them
-bbr.sh                  # BBR management
-install.sh              # distro-detecting installer entry
-Dockerfile              # multi-arch image build
-entrypoint.sh           # entrypoint: generate config + print client config
-build-docker-images.sh  # local batch image build
-surge.conf              # Surge reference config
+    routing.sh          #     rule-based routing (sing-box)
+tools/build.sh          # bundles src/ into the single-file scripts in the root and scripts/ (--check: verify only)
+sources/                # backup of the official Snell v4 packages
 ```
 
-> ⚠️ Do not move the scripts out of the repository root: installed copies self-update through
-> the `*.jinqians.com` short domains or `https://raw.githubusercontent.com/jinqians/snell.sh/main/<script>.sh`,
-> and PSM runs the root `snell.sh` directly. So the source lives in `src/` and the root holds the
-> single files `bash tools/build.sh` generates (`bash <(curl …)` can only fetch one file).
+> ⚠️ Keep `snell.sh`, `snell-centos.sh` and `snell-alpine.sh` in the root: older installs' `snell` command and
+> PSM fetch `https://raw.githubusercontent.com/jinqians/snell.sh/main/<script>.sh` directly, and raw URLs can't
+> be redirected. New versions rewrite an old `snell` command to use the short domain. The other scripts are only
+> reached through the short domains or from the main script, so moving them only needs the Cloudflare redirects changed.
+> The source lives in `src/`; what's published are the single files `bash tools/build.sh` generates (`bash <(curl …)` can only fetch one file).
 
 ---
 
@@ -591,8 +598,8 @@ docker run -d --name snell-server \
 #### e. Building images locally
 
 ```bash
-./build-docker-images.sh                      # all channels and versions
-USE_BUILDX=1 PUSH=1 ./build-docker-images.sh  # multi-arch build and push
+./docker/build-docker-images.sh                      # all channels and versions
+USE_BUILDX=1 PUSH=1 ./docker/build-docker-images.sh  # multi-arch build and push
 ```
 
 ### 3. Docker Compose

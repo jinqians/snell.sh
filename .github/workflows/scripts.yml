@@ -5,9 +5,9 @@ name: scripts
 
 on:
   push:
-    paths: ["src/**", "tools/**", "*.sh", ".github/workflows/scripts.yml"]
+    paths: ["src/**", "tools/**", "scripts/**", "docker/**", "*.sh", ".github/workflows/scripts.yml"]
   pull_request:
-    paths: ["src/**", "tools/**", "*.sh", ".github/workflows/scripts.yml"]
+    paths: ["src/**", "tools/**", "scripts/**", "docker/**", "*.sh", ".github/workflows/scripts.yml"]
 
 jobs:
   check:
@@ -17,12 +17,12 @@ jobs:
       - name: generated files match src/
         run: bash tools/build.sh --check
       - name: bash -n
-        run: for f in *.sh src/*.sh src/lib/*.sh tools/*.sh; do bash -n "$f" || exit 1; done
+        run: for f in *.sh scripts/*.sh docker/*.sh src/*.sh src/lib/*.sh tools/*.sh; do bash -n "$f" || exit 1; done
       - name: POSIX scripts parse under dash and busybox ash
         run: |
           sudo apt-get install -y -qq dash busybox >/dev/null
-          for f in snell-alpine.sh snell-docker.sh install.sh entrypoint.sh src/lib/common.sh src/lib/release.sh src/lib/netinfo.sh src/lib/firewall.sh; do
+          for f in snell-alpine.sh scripts/snell-docker.sh scripts/install.sh docker/entrypoint.sh docker/build-docker-images.sh src/lib/common.sh src/lib/release.sh src/lib/netinfo.sh src/lib/firewall.sh; do
             dash -n "$f" && busybox ash -n "$f" || exit 1
           done
       - name: shellcheck (errors)
-        run: shellcheck -S error *.sh
+        run: shellcheck -S error *.sh scripts/*.sh docker/*.sh
