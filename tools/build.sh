@@ -25,11 +25,6 @@ TARGETS=(
     "scripts/bbr.sh:src/bbr.sh"
     "scripts/snell-docker.sh:src/snell-docker.sh"
     "scripts/install.sh:src/install.sh"
-    # 过渡：menu / snell-docker / install 三个短域名改指 scripts/ 之前，根目录的旧地址照常可用；
-    # 重定向改好后删掉这三行和根目录的这三个文件
-    "menu.sh:src/menu.sh"
-    "snell-docker.sh:src/snell-docker.sh"
-    "install.sh:src/install.sh"
 )
 
 bundle() {   # <源文件> → 标准输出

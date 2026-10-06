@@ -7,10 +7,19 @@
 [![Pull Requests](https://img.shields.io/github/issues-pr/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/pulls)
 [![Docker Pulls](https://img.shields.io/docker/pulls/jinqians/snell-server?style=flat-square&logo=docker&color=blue)](https://hub.docker.com/r/jinqians/snell-server)
 [![License](https://img.shields.io/github/license/jinqians/snell.sh?style=flat-square&color=blue)](LICENSE)
+[![runs today](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dtoday&style=flat-square)](#)
+[![runs, 7 days](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D7d&style=flat-square)](#)
+[![runs, 30 days](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D30d&style=flat-square)](#)
+[![runs](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dall&style=flat-square)](#)
 
 Install and manage Snell v4 / v5 / v6 with one command — with ShadowTLS v3,
 multi-user support and BBR, plus multi-arch Docker images that print the client
 config on first start.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://stats.jinqians.com/chart/snell.svg?theme=dark">
+  <img alt="Daily runs, last 30 days" src="https://stats.jinqians.com/chart/snell.svg">
+</picture>
 
 [English](README.en.md) ｜ [中文](README.md) ｜ [Author's site](https://jinqians.com)
 
@@ -935,11 +944,7 @@ What's inside:
 
 ## Sponsors
 
-Thanks to the sponsors supporting this project:
-
-- 🥇 **[ZMTO](https://console.zmto.com/?affid=1567)** — [ZMTO review](https://vps.jinqians.com/zmto/)
-
-If this project helps you, a ⭐ Star is appreciated.
+Sponsorship from reputable vendors is welcome.
 
 ---
 

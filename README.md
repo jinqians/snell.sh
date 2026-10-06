@@ -7,9 +7,18 @@
 [![Pull Requests](https://img.shields.io/github/issues-pr/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/pulls)
 [![Docker Pulls](https://img.shields.io/docker/pulls/jinqians/snell-server?style=flat-square&logo=docker&color=blue)](https://hub.docker.com/r/jinqians/snell-server)
 [![License](https://img.shields.io/github/license/jinqians/snell.sh?style=flat-square&color=blue)](LICENSE)
+[![今日运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dtoday%26lang%3Dzh&style=flat-square)](#)
+[![近 7 天运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D7d%26lang%3Dzh&style=flat-square)](#)
+[![近 30 天运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D30d%26lang%3Dzh&style=flat-square)](#)
+[![累计运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dall%26lang%3Dzh&style=flat-square)](#)
 
 一键安装与管理 Snell v4 / v5 / v6，支持 ShadowTLS v3、多用户与 BBR，
 并提供启动即输出客户端配置的多架构 Docker 镜像。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://stats.jinqians.com/chart/snell.svg?theme=dark&lang=zh">
+  <img alt="近 30 天每日运行次数" src="https://stats.jinqians.com/chart/snell.svg?lang=zh">
+</picture>
 
 [中文](README.md) ｜ [English](README.en.md) ｜ [作者网站](https://jinqians.com)
 
@@ -926,11 +935,7 @@ https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
 
 ## 赞助
 
-感谢以下赞助商对本项目的支持：
-
-- 🥇 **[ZMTO](https://console.zmto.com/?affid=1567)** —— [ZMTO 测评](https://vps.jinqians.com/zmto/)
-
-如果这个项目对你有帮助，欢迎点一个 ⭐ Star。
+欢迎信誉良好的商家进行赞助。
 
 ---
 
