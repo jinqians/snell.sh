@@ -1125,6 +1125,27 @@ backup_snell_config() {
 CONFIG_DIR="/etc/shadowtls"
 SERVICE_FILE="${SYSTEMD_DIR}/shadowtls.service"
 
+# 监听地址：内核能双栈（有 IPv6、bindv6only=0）时监听 ::0，IPv4、IPv6 都收；
+# IPv6 关掉了或 bindv6only=1 时 ::0 收不到 IPv4（ss-2022 issue #13），有 IPv4 就监听 0.0.0.0
+stls_listen_addr() {
+    local v6=0 v4=0
+    [ -f /proc/net/if_inet6 ] && v6=1
+    ip -4 addr show scope global 2>/dev/null | grep -q "inet " && v4=1
+    if [ "$v6" = 1 ] && { [ "$v4" = 0 ] || [ "$(cat /proc/sys/net/ipv6/bindv6only 2>/dev/null)" != "1" ]; }; then
+        echo "::0"
+    else
+        echo "0.0.0.0"
+    fi
+}
+
+# 从服务文件（或标准输入）里读 shadow-tls 的参数，不管监听地址写的是 ::0、0.0.0.0 还是手改过的
+# （sed 而不是 grep -P：BusyBox 的 grep 没有 -P）
+stls_listen_port() { sed -n 's/.*--listen [^ ]*:\([0-9][0-9]*\).*/\1/p' "$@" | head -n 1; }
+stls_opt() {   # <参数名> [文件]：--<参数名> 后面的值
+    local k="$1"; shift
+    sed -n "s/.*--${k} \([^ ][^ ]*\).*/\1/p" "$@" | head -n 1
+}
+
 # 后端端口 -> v6 的 mode（客户端必须与服务端一致）
 get_port_snell_mode() {
     local conf_file mode=""
@@ -1495,7 +1516,7 @@ get_used_stls_ports() {
     # 检查 SS 服务
     local ss_service="${SYSTEMD_DIR}/shadowtls-ss.service"
     if [ -f "$ss_service" ]; then
-        local ss_port=$(grep -oP '(?<=--listen ::0:)\d+' "$ss_service")
+        local ss_port=$(stls_listen_port "$ss_service")
         if [ ! -z "$ss_port" ]; then
             used_ports+=("$ss_port")
         fi
@@ -1505,7 +1526,7 @@ get_used_stls_ports() {
     local snell_services=$(find /etc/systemd/system -name "shadowtls-snell-*.service" 2>/dev/null)
     if [ ! -z "$snell_services" ]; then
         while IFS= read -r service_file; do
-            local port=$(grep -oP '(?<=--listen ::0:)\d+' "$service_file")
+            local port=$(stls_listen_port "$service_file")
             if [ ! -z "$port" ]; then
                 used_ports+=("$port")
             fi
@@ -1765,7 +1786,7 @@ User=root
 Group=root
 Environment=RUST_BACKTRACE=1
 Environment=RUST_LOG=info
-ExecStart=/usr/local/bin/shadow-tls --fastopen --v3 server --listen ::0:${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}${wildcard_sni_flag}
+ExecStart=/usr/local/bin/shadow-tls --fastopen --v3 server --listen $(stls_listen_addr):${listen_port} --server 127.0.0.1:${port} --tls ${tls_domain} --password ${password}${wildcard_sni_flag}
 StandardOutput=append:/var/log/shadowtls-${identifier}.log
 StandardError=append:/var/log/shadowtls-${identifier}.log
 SyslogIdentifier=${identifier}
@@ -2100,7 +2121,7 @@ install_shadowtls() {
             if [ ! -z "$port" ]; then
                 local service_file="${SYSTEMD_DIR}/shadowtls-snell-${port}.service"
                 if [ -f "$service_file" ]; then
-                    local stls_port=$(grep -oP '(?<=--listen ::0:)\d+' "$service_file")
+                    local stls_port=$(stls_listen_port "$service_file")
                     generate_snell_links "${server_ip}" "${stls_port}" "${psk}" "${password}" "${tls_domain}" "${port}"
                 fi
             fi
@@ -2190,9 +2211,9 @@ view_config() {
     # 检查 SS 是否安装并获取配置
     if [ -f "$ss_service" ] && check_ssrust; then
         echo -e "\n${YELLOW}=== Shadowsocks + ShadowTLS 配置 ===${RESET}"
-        local ss_listen_port=$(grep -oP '(?<=--listen ::0:)\d+' "$ss_service")
-        local tls_domain=$(grep -oP '(?<=--tls )[^ ]+' "$ss_service")
-        local password=$(grep -oP '(?<=--password )[^ ]+' "$ss_service")
+        local ss_listen_port=$(stls_listen_port "$ss_service")
+        local tls_domain=$(stls_opt tls "$ss_service")
+        local password=$(stls_opt password "$ss_service")
         local ss_port=$(get_ssrust_port)
         local ssrust_password=$(get_ssrust_password)
         local ssrust_method=$(get_ssrust_method)
@@ -2222,9 +2243,9 @@ view_config() {
                     local service_file="${SYSTEMD_DIR}/shadowtls-snell-${port}.service"
                     if [ -f "$service_file" ]; then
                         local exec_line=$(grep "ExecStart=" "$service_file")
-                        local stls_port=$(echo "$exec_line" | grep -oP '(?<=--listen ::0:)\d+')
-                        local stls_password=$(echo "$exec_line" | grep -oP '(?<=--password )[^ ]+')
-                        local stls_domain=$(echo "$exec_line" | grep -oP '(?<=--tls )[^ ]+')
+                        local stls_port=$(printf '%s\n' "$exec_line" | stls_listen_port)
+                        local stls_password=$(printf '%s\n' "$exec_line" | stls_opt password)
+                        local stls_domain=$(printf '%s\n' "$exec_line" | stls_opt tls)
                         
                         if [ "$port" = "$(get_snell_port)" ]; then
                             echo -e "\n${GREEN}主用户配置：${RESET}"

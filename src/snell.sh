@@ -1426,10 +1426,10 @@ view_snell_config() {
         declare -A processed_ports
         while IFS= read -r service_file; do
             local exec_line=$(grep "ExecStart=" "$service_file")
-            local stls_port=$(echo "$exec_line" | grep -oP '(?<=--listen ::0:)\d+')
-            local stls_password=$(echo "$exec_line" | grep -oP '(?<=--password )[^ ]+')
-            local stls_domain=$(echo "$exec_line" | grep -oP '(?<=--tls )[^ ]+')
-            local snell_port=$(echo "$exec_line" | grep -oP '(?<=--server 127.0.0.1:)\d+')
+            local stls_port=$(printf '%s\n' "$exec_line" | sed -n 's/.*--listen [^ ]*:\([0-9][0-9]*\).*/\1/p' | head -n 1)
+            local stls_password=$(printf '%s\n' "$exec_line" | sed -n 's/.*--password \([^ ][^ ]*\).*/\1/p' | head -n 1)
+            local stls_domain=$(printf '%s\n' "$exec_line" | sed -n 's/.*--tls \([^ ][^ ]*\).*/\1/p' | head -n 1)
+            local snell_port=$(printf '%s\n' "$exec_line" | sed -n 's/.*--server 127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' | head -n 1)
             # 查找 psk
             local psk=""
             if [ -f "${SNELL_CONF_DIR}/users/snell-${snell_port}.conf" ]; then
