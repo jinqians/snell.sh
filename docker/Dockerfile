@@ -109,7 +109,7 @@ ENV SNELL_VER=${SNELL_VER}
 LABEL org.opencontainers.image.title="Snell Server" \
       org.opencontainers.image.version="${SNELL_VERSION}" \
       org.opencontainers.image.created="${BUILD_CREATED}" \
-      org.opencontainers.image.source="https://github.com/jinqians/snell.sh"
+      org.opencontainers.image.source="https://github.com/jinqians/snell"
 
 # 创建配置目录（nobody 可写，供 entrypoint 首次启动时生成配置）
 RUN mkdir -p /etc/snell && chown nobody:nogroup /etc/snell

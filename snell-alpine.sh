@@ -23,7 +23,7 @@ RESET='\033[0m'
 # 菜单里调用的子脚本从 SNELL_RAW_BASE 下的 scripts/、docker/ 取。
 # 脚本自身的更新与管理命令走短域名，运行才会被统计到。
 # 可以用同名环境变量换成镜像地址（测试时指向本地的文件）。
-SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell.sh/main}"
+SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell/main}"
 SNELL_SCRIPT_URL="${SNELL_SCRIPT_URL:-https://snell.jinqians.com}"                     # snell.sh（Debian / Ubuntu / CentOS / RHEL）
 SNELL_ALPINE_SCRIPT_URL="${SNELL_ALPINE_SCRIPT_URL:-https://snell-alpine.jinqians.com}" # snell-alpine.sh
 SNELL_DOCKER_SCRIPT_URL="${SNELL_DOCKER_SCRIPT_URL:-https://snell-docker.jinqians.com}" # snell-docker.sh
@@ -1093,7 +1093,8 @@ show_menu() {
 check_root
 check_system
 # 旧版写的 snell 命令直连 raw.githubusercontent.com 上的固定路径，换成走短域名的新写法
-if [ -f /usr/local/bin/snell ] && grep -q 'raw.githubusercontent.com/jinqians/snell.sh/' /usr/local/bin/snell 2>/dev/null; then
+# （仓库改名前叫 jinqians/snell.sh，两个名字都认）
+if [ -f /usr/local/bin/snell ] && grep -qE 'raw\.githubusercontent\.com/jinqians/snell(\.sh)?/' /usr/local/bin/snell 2>/dev/null; then
     create_management_script
 fi
 

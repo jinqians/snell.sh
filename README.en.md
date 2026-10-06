@@ -2,17 +2,17 @@
 
 # Snell One-Click Script & Docker Image
 
-[![Stars](https://img.shields.io/github/stars/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/stargazers)
-[![Forks](https://img.shields.io/github/forks/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/network/members)
-[![Pull Requests](https://img.shields.io/github/issues-pr/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/pulls)
+[![Stars](https://img.shields.io/github/stars/jinqians/snell?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell/stargazers)
+[![Forks](https://img.shields.io/github/forks/jinqians/snell?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell/network/members)
+[![Pull Requests](https://img.shields.io/github/issues-pr/jinqians/snell?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell/pulls)
 [![Docker Pulls](https://img.shields.io/docker/pulls/jinqians/snell-server?style=flat-square&logo=docker&color=blue)](https://hub.docker.com/r/jinqians/snell-server)
-[![License](https://img.shields.io/github/license/jinqians/snell.sh?style=flat-square&color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/jinqians/snell?style=flat-square&color=blue)](LICENSE)
 
 Install and manage Snell v4 / v5 / v6 with one command — with ShadowTLS v3,
 multi-user support and BBR, plus multi-arch Docker images that print the client
 config on first start.
 
-[English](README.en.md) ｜ [中文](README.md) ｜ [Docs (wiki)](https://github.com/jinqians/snell.sh/wiki) ｜ [Author's site](https://jinqians.com)
+[English](README.en.md) ｜ [中文](README.md) ｜ [Docs (wiki)](https://github.com/jinqians/snell/wiki) ｜ [Author's site](https://jinqians.com)
 
 </div>
 
@@ -36,7 +36,7 @@ Or run the one for your system:
 | All-in-one menu (Snell / SS-2022 / ShadowTLS) | `bash <(curl -fsSL https://menu.jinqians.com)` |
 
 Afterwards, `snell` opens the menu: the config, changing the port / PSK / DNS, more users, versions (v4 / v5 / v6 side by side), ShadowTLS, BBR, rule-based routing.
-→ [Script install and management](https://github.com/jinqians/snell.sh/wiki/Script-Install-and-Management)
+→ [Script install and management](https://github.com/jinqians/snell/wiki/Script-Install-and-Management)
 
 ## Docker
 
@@ -69,8 +69,8 @@ services:
       - ./snell-config:/etc/snell
 ```
 
-For Snell v6: the `:v6` image, `SNELL_VER=v6`, and `SNELL_MODE` for the transport mode (clients must match) → [Deploying Snell v6](https://github.com/jinqians/snell.sh/wiki/Docker#c-deploying-snell-v6).
-ShadowTLS, switching versions, every environment variable → [Docker](https://github.com/jinqians/snell.sh/wiki/Docker)
+For Snell v6: the `:v6` image, `SNELL_VER=v6`, and `SNELL_MODE` for the transport mode (clients must match) → [Deploying Snell v6](https://github.com/jinqians/snell/wiki/Docker#c-deploying-snell-v6).
+ShadowTLS, switching versions, every environment variable → [Docker](https://github.com/jinqians/snell/wiki/Docker)
 
 ## Getting the client config
 
@@ -88,19 +88,19 @@ HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 5, reuse = true, tfo = true
 ## ShadowTLS (optional)
 
 A TLS disguise around Snell; only the ShadowTLS port is exposed. Script install: menu → "9. ShadowTLS";
-Docker: add `SHADOWTLS_ENABLE=1` and friends → [Snell + ShadowTLS v3](https://github.com/jinqians/snell.sh/wiki/Docker#b-snell--shadowtls-v3)
+Docker: add `SHADOWTLS_ENABLE=1` and friends → [Snell + ShadowTLS v3](https://github.com/jinqians/snell/wiki/Docker#b-snell--shadowtls-v3)
 
 ## Documentation
 
-Features, usage and how it works are in the [wiki](https://github.com/jinqians/snell.sh/wiki):
+Features, usage and how it works are in the [wiki](https://github.com/jinqians/snell/wiki):
 
-- [Overview](https://github.com/jinqians/snell.sh/wiki/Overview) — features, repository layout
-- [Script install and management](https://github.com/jinqians/snell.sh/wiki/Script-Install-and-Management) — the all-in-one menu, v4 / v5 / v6 side by side, Alpine, the main menu
-- [Rule-based routing](https://github.com/jinqians/snell.sh/wiki/Rule-based-Routing) — rule sets with sing-box (the server stays the official snell-server)
-- [Docker](https://github.com/jinqians/snell.sh/wiki/Docker) — image tags, ShadowTLS, v6, switching versions, Compose, environment variables
-- [Traffic management](https://github.com/jinqians/snell.sh/wiki/Traffic-Management) ｜ [PSM](https://github.com/jinqians/snell.sh/wiki/PSM)
-- [Protocols](https://github.com/jinqians/snell.sh/wiki/Protocols) — v4 / v5 / v6, choosing the v6 options, ShadowTLS
-- [Surge config](https://github.com/jinqians/snell.sh/wiki/Surge-Config)
+- [Overview](https://github.com/jinqians/snell/wiki/Overview) — features, repository layout
+- [Script install and management](https://github.com/jinqians/snell/wiki/Script-Install-and-Management) — the all-in-one menu, v4 / v5 / v6 side by side, Alpine, the main menu
+- [Rule-based routing](https://github.com/jinqians/snell/wiki/Rule-based-Routing) — rule sets with sing-box (the server stays the official snell-server)
+- [Docker](https://github.com/jinqians/snell/wiki/Docker) — image tags, ShadowTLS, v6, switching versions, Compose, environment variables
+- [Traffic management](https://github.com/jinqians/snell/wiki/Traffic-Management) ｜ [PSM](https://github.com/jinqians/snell/wiki/PSM)
+- [Protocols](https://github.com/jinqians/snell/wiki/Protocols) — v4 / v5 / v6, choosing the v6 options, ShadowTLS
+- [Surge config](https://github.com/jinqians/snell/wiki/Surge-Config)
 
 ---
 

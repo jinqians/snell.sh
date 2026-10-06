@@ -649,10 +649,10 @@ EOFSCRIPT
 }
 
 # 旧版写的管理命令直连 raw.githubusercontent.com 上的固定路径（snell.sh / snell-centos.sh），
-# 换成走短域名的新写法；不是本脚本写的文件不动
+# 换成走短域名的新写法；不是本脚本写的文件不动。仓库改名前叫 jinqians/snell.sh，两个名字都认
 upgrade_management_script() {
     [ -f /usr/local/bin/snell ] || return 0
-    grep -q 'raw.githubusercontent.com/jinqians/snell.sh/' /usr/local/bin/snell 2>/dev/null || return 0
+    grep -qE 'raw\.githubusercontent\.com/jinqians/snell(\.sh)?/' /usr/local/bin/snell 2>/dev/null || return 0
     write_management_script && echo -e "${GREEN}已更新 snell 管理命令（改为经 snell.jinqians.com 获取最新脚本）${RESET}"
 }
 
@@ -2189,30 +2189,39 @@ edit_snell_config() {
     echo -e "${CYAN}新的客户端配置见「3. 查看配置」${RESET}"
 }
 
-# 菜单里中文占两格：按显示宽度补齐（与 locale 无关：非 ASCII 字符按 3 字节、2 格算）
+# 显示宽度，与 locale 无关（新装的 VPS 常常没有 UTF-8 locale）：逐个 UTF-8 字节看，
+# ASCII 与两字节的字符（×）占一格，三、四字节的（中文）占两格，后续字节不算（同 PSM 的 _mwidth）
 _dw() {
-    local a b
-    a=$(printf '%s' "$1" | LC_ALL=C tr -d '\200-\377' | LC_ALL=C wc -c)
-    b=$(printf '%s' "$1" | LC_ALL=C wc -c)
-    echo $(( a + 2 * (b - a) / 3 ))
+    local s="$1" i code w=0
+    local LC_ALL=C
+    for (( i = 0; i < ${#s}; i++ )); do
+        printf -v code '%d' "'${s:i:1}"
+        (( code < 0 )) && (( code += 256 ))
+        if (( code < 0x80 || (code >= 0xC0 && code < 0xE0) )); then
+            w=$((w + 1))
+        elif (( code >= 0xE0 )); then
+            w=$((w + 2))
+        fi
+    done
+    echo "$w"
 }
 _pad() {   # <文字> <宽度>：文字后补空格到这个宽度
     local w; w=$(_dw "$1")
     printf '%s%*s' "$1" $(( $2 > w ? $2 - w : 0 )) ''
 }
-# 一行菜单：<组名> <编号> <名称> [<编号> <名称>]
-_menu_line() {
-    local line
-    line="  ${CYAN}$(_pad "$1" 6)${RESET}"
-    line="${line}${GREEN}$(printf '%3s' "$2")${RESET}  $(_pad "$3" 22)"
-    [ -n "${4:-}" ] && line="${line}${GREEN}$(printf '%3s' "$4")${RESET}  $5"
-    echo -e "$line"
-}
-_dot() { if [ "$1" = "on" ]; then printf '%b' "${GREEN}●${RESET}"; else printf '%b' "${YELLOW}○${RESET}"; fi; }
 
-# 菜单顶部的状态：两行，只看有没有在跑、跑了几个
+# 状态栏的一项：<标签> <值> <颜色>（加进 menu_status 的数组）
+_st() { labels+=("$1"); values+=("$2"); colors+=("$3"); }
+
+# 菜单顶部的状态（同 PSM）：「标签 ▶ 值」两列；绿 = 在跑 / 已启用，黄 = 没有 / 没跑全。
+# 公网 IP 只取一次。
+MENU_IP=""
 menu_status() {
-    local port conf units=() unit running=0 total=0 mem=0 pid rss ch chs="" line
+    local labels=() values=() colors=()
+    local conf port unit running=0 total=0 mem=0 pid rss ch chs="" n=0 r=0 f i line
+    [ -n "$MENU_IP" ] || MENU_IP=$(curl -s4 --connect-timeout 3 --max-time 5 https://api.ipify.org 2>/dev/null)
+    [[ "$MENU_IP" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || MENU_IP="N/A"
+    _st IP "$MENU_IP" ""
     if command -v snell-server >/dev/null 2>&1 || ls "${INSTALL_DIR}"/snell-server-v[456] >/dev/null 2>&1; then
         # 主用户的配置也在 users/ 下（snell-main.conf），每个配置只数一次
         for conf in "${SNELL_CONF_DIR}"/users/*.conf; do
@@ -2229,49 +2238,86 @@ menu_status() {
             fi
         done
         for ch in $(list_installed_snell_versions); do
-            chs="${chs}${ch}×$(list_services_using_version "$ch" | grep -c .) "
+            chs="${chs:+$chs }${ch}×$(list_services_using_version "$ch" | grep -c .)"
         done
-        if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then line="$(_dot on) 运行中 ${running}/${total}"
-        elif [ "$total" -gt 0 ]; then line="$(_dot off) 运行中 ${running}/${total}"
-        else line="$(_dot off) 已安装，未配置"; fi
-        echo -e "  $(_pad Snell 11)${line}   ${chs}  内存 $(awk -v k="$mem" 'BEGIN { printf "%.1f", k / 1024 }') MB"
+        if [ "$total" -eq 0 ]; then _st Snell "已安装，未配置" "$YELLOW"
+        elif [ "$running" -eq "$total" ]; then _st Snell "运行中 ${running}/${total}" "$GREEN"
+        else _st Snell "运行中 ${running}/${total}" "$YELLOW"; fi
+        _st 版本 "${chs:-无}" ""
+        _st 内存 "$(awk -v k="$mem" 'BEGIN { printf "%.1f", k / 1024 }') MB" ""
     else
-        echo -e "  $(_pad Snell 11)$(_dot off) 未安装"
+        _st Snell "未安装" "$YELLOW"
     fi
-    local stls bbr route n=0 r=0 f
     if [ -x /usr/local/bin/shadow-tls ]; then
         for f in "${SYSTEMD_DIR}"/shadowtls-*.service; do
             [ -f "$f" ] || continue
             n=$((n + 1)); systemctl is-active --quiet "$(basename "$f")" && r=$((r + 1))
         done
-        if [ "$n" -gt 0 ] && [ "$r" -eq "$n" ]; then stls="$(_dot on) 运行中 ${r}/${n}"; else stls="$(_dot off) 运行中 ${r}/${n}"; fi
+        if [ "$n" -eq 0 ]; then _st ShadowTLS "已安装，未配置" "$YELLOW"
+        elif [ "$r" -eq "$n" ]; then _st ShadowTLS "运行中 ${r}/${n}" "$GREEN"
+        else _st ShadowTLS "运行中 ${r}/${n}" "$YELLOW"; fi
     else
-        stls="$(_dot off) 未安装"
+        _st ShadowTLS "未安装" "$YELLOW"
     fi
-    if [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ]; then bbr="$(_dot on) 已启用"; else bbr="$(_dot off) 未启用"; fi
-    if systemctl is-active --quiet snell-router 2>/dev/null; then route="$(_dot on) 已启用"
-    elif router_installed; then route="$(_dot off) 已停用"
-    else route="$(_dot off) 未启用"; fi
-    echo -e "  $(_pad ShadowTLS 11)${stls}    BBR ${bbr}    分流 ${route}"
+    if [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ]; then _st BBR "已启用" "$GREEN"
+    else _st BBR "未启用" "$YELLOW"; fi
+    if systemctl is-active --quiet snell-router 2>/dev/null; then _st 分流 "已启用" "$GREEN"
+    elif router_installed; then _st 分流 "已停用" "$YELLOW"
+    else _st 分流 "未启用" "$YELLOW"; fi
+    # 标签 9 格（最长 ShadowTLS），左列的值补到 16 格
+    for (( i = 0; i < ${#labels[@]}; i += 2 )); do
+        line="  ${CYAN}$(_pad "${labels[i]}" 9)${RESET} ▶  ${colors[i]}"
+        if (( i + 1 < ${#labels[@]} )); then
+            line="${line}$(_pad "${values[i]}" 16)${RESET} ${CYAN}$(_pad "${labels[i + 1]}" 9)${RESET} ▶  ${colors[i + 1]}${values[i + 1]}${RESET}"
+        else
+            line="${line}${values[i]}${RESET}"
+        fi
+        echo -e "$line"
+    done
 }
 
-# 主菜单
+# 主菜单（同 PSM 的样式）：标题、状态栏，下面两列，先排满左列
 show_menu() {
-    local rule="  ──────────────────────────────────────────────────────────"
-    clear
-    echo -e "${CYAN}  Snell 管理脚本 v${current_version}${RESET}$(printf '%*s' 27 '')${CYAN}jinqians.com${RESET}"
-    echo -e "${CYAN}${rule}${RESET}"
+    local BOLD='\033[1m' BLUE='\033[34m' BC='\033[96m' BB='\033[94m' WH='\033[97m' DM='\033[2m'
+    local wide="══════════════════════════════════════════════════════════════"
+    local thin="──────────────────────────────────────────────────────────────"
+    local rule="──────────────────────────────────────────────"
+    local items=("安装 Snell" "卸载 Snell" "查看配置" "修改端口 / PSK / DNS" "多用户管理" "版本管理（v4/v5/v6）" "重启服务"
+                 "服务状态" "ShadowTLS" "BBR" "规则分流（sing-box）" "出口控制（v5/v6）" "更新脚本")
+    local rows=7 i k w=0 line
+    clear 2>/dev/null || true
+    echo
+    printf "  ${BOLD}${BC}%s${RESET}\n" ' ____     _   _    _____    _        _     '
+    printf "  ${BOLD}${BC}%s${RESET}\n" '/ ___|   | \ | |  | ____|  | |      | |    '
+    printf "  ${BOLD}${BB}%s${RESET}\n" '\___ \   |  \| |  |  _|    | |      | |    '
+    printf "  ${BOLD}${BB}%s${RESET}\n" ' ___) |  | |\  |  | |___   | |___   | |___ '
+    printf "  ${BOLD}${BC}%s${RESET}\n" '|____/   |_| \_|  |_____|  |_____|  |_____|'
+    echo
+    echo -e "  ${BOLD}${WH}Snell Manager v${current_version}${RESET}  ${DM}·····${RESET}  ${YELLOW}◆ https://jinqians.com${RESET}"
+    echo -e "  ${BLUE}${rule}${RESET}"
     menu_status
-    echo -e "${CYAN}${rule}${RESET}"
-    _menu_line "安装" 1 "安装 Snell" 2 "卸载 Snell"
-    _menu_line "配置" 3 "查看配置" 4 "修改端口 / PSK / DNS"
-    _menu_line "" 5 "多用户管理" 6 "版本管理（v4 / v5 / v6）"
-    _menu_line "服务" 7 "重启服务" 8 "服务状态"
-    _menu_line "增强" 9 "ShadowTLS" 10 "BBR"
-    _menu_line "" 11 "规则分流（sing-box）" 12 "出口控制（v5 / v6）"
-    _menu_line "脚本" 13 "更新脚本" 0 "退出"
-    echo -e "${CYAN}${rule}${RESET}"
-    if ! read -rp "  请选择 [0-13]: " num; then
+    echo -e "  ${BLUE}${rule}${RESET}"
+    echo
+    # 左列和它最长的一项一样宽
+    for (( i = 0; i < rows; i++ )); do
+        k=$(_dw "${items[i]}"); (( k > w )) && w=$k
+    done
+    echo -e "${BOLD}${BLUE}${wide}${RESET}"
+    echo -e "${BOLD}                      JQ's Snell Manager${RESET}"
+    echo -e "${BOLD}${BLUE}${wide}${RESET}"
+    for (( i = 0; i < rows; i++ )); do
+        line="  ${CYAN}$(printf '%2d.' $((i + 1)))${RESET} "
+        if [ -n "${items[i + rows]:-}" ]; then
+            line="${line}$(_pad "${items[i]}" "$w")  ${CYAN}$(printf '%2d.' $((i + 1 + rows)))${RESET} ${items[i + rows]}"
+        else
+            line="${line}${items[i]}"
+        fi
+        echo -e "$line"
+    done
+    echo -e "${BOLD}${BLUE}${thin}${RESET}"
+    echo -e "  ${CYAN} 0.${RESET} 退出"
+    echo -e "${BOLD}${BLUE}${wide}${RESET}"
+    if ! read -rp "$(echo -e "${CYAN}请选择: ${RESET}")" num; then
         echo
         echo -e "${YELLOW}未读取到输入，已退出 Snell 菜单。${RESET}"
         exit 0

@@ -20,8 +20,8 @@ current_version="4.6"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # 中国大陆屏蔽脚本仓库地址
-MAINLAND_BLOCK_URL="https://raw.githubusercontent.com/jinqians/ss-2022.sh/refs/heads/main/block-mainland.sh"
-MAINLAND_EXTRACT_URL="https://raw.githubusercontent.com/jinqians/ss-2022.sh/refs/heads/main/extract-cn-ip-from-mmdb.py"
+MAINLAND_BLOCK_URL="https://raw.githubusercontent.com/jinqians/ss-2022/refs/heads/main/block-mainland.sh"
+MAINLAND_EXTRACT_URL="https://raw.githubusercontent.com/jinqians/ss-2022/refs/heads/main/extract-cn-ip-from-mmdb.py"
 MAINLAND_SCRIPT_DIR="/usr/local/share/ss-2022"
 
 # 安装全局命令
@@ -256,7 +256,7 @@ manage_snell() {
 
 # 安装/管理 SS-2022
 manage_ss_rust() {
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022/main/ss-2022.sh)
 }
 
 # 管理中国大陆IP屏蔽

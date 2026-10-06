@@ -23,7 +23,7 @@ RESET='\033[0m'
 # 菜单里调用的子脚本从 SNELL_RAW_BASE 下的 scripts/、docker/ 取。
 # 脚本自身的更新与管理命令走短域名，运行才会被统计到。
 # 可以用同名环境变量换成镜像地址（测试时指向本地的文件）。
-SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell.sh/main}"
+SNELL_RAW_BASE="${SNELL_RAW_BASE:-https://raw.githubusercontent.com/jinqians/snell/main}"
 SNELL_SCRIPT_URL="${SNELL_SCRIPT_URL:-https://snell.jinqians.com}"                     # snell.sh（Debian / Ubuntu / CentOS / RHEL）
 SNELL_ALPINE_SCRIPT_URL="${SNELL_ALPINE_SCRIPT_URL:-https://snell-alpine.jinqians.com}" # snell-alpine.sh
 SNELL_DOCKER_SCRIPT_URL="${SNELL_DOCKER_SCRIPT_URL:-https://snell-docker.jinqians.com}" # snell-docker.sh
@@ -1563,8 +1563,8 @@ current_version="4.6"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # 中国大陆屏蔽脚本仓库地址
-MAINLAND_BLOCK_URL="https://raw.githubusercontent.com/jinqians/ss-2022.sh/refs/heads/main/block-mainland.sh"
-MAINLAND_EXTRACT_URL="https://raw.githubusercontent.com/jinqians/ss-2022.sh/refs/heads/main/extract-cn-ip-from-mmdb.py"
+MAINLAND_BLOCK_URL="https://raw.githubusercontent.com/jinqians/ss-2022/refs/heads/main/block-mainland.sh"
+MAINLAND_EXTRACT_URL="https://raw.githubusercontent.com/jinqians/ss-2022/refs/heads/main/extract-cn-ip-from-mmdb.py"
 MAINLAND_SCRIPT_DIR="/usr/local/share/ss-2022"
 
 # 安装全局命令
@@ -1799,7 +1799,7 @@ manage_snell() {
 
 # 安装/管理 SS-2022
 manage_ss_rust() {
-    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022.sh/main/ss-2022.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/jinqians/ss-2022/main/ss-2022.sh)
 }
 
 # 管理中国大陆IP屏蔽
