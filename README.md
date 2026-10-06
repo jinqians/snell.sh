@@ -7,18 +7,9 @@
 [![Pull Requests](https://img.shields.io/github/issues-pr/jinqians/snell.sh?style=flat-square&logo=github&color=blue)](https://github.com/jinqians/snell.sh/pulls)
 [![Docker Pulls](https://img.shields.io/docker/pulls/jinqians/snell-server?style=flat-square&logo=docker&color=blue)](https://hub.docker.com/r/jinqians/snell-server)
 [![License](https://img.shields.io/github/license/jinqians/snell.sh?style=flat-square&color=blue)](LICENSE)
-[![今日运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dtoday%26lang%3Dzh&style=flat-square)](#)
-[![近 7 天运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D7d%26lang%3Dzh&style=flat-square)](#)
-[![近 30 天运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3D30d%26lang%3Dzh&style=flat-square)](#)
-[![累计运行](https://img.shields.io/endpoint?url=https%3A%2F%2Fstats.jinqians.com%2Fbadge%2Fsnell.json%3Fperiod%3Dall%26lang%3Dzh&style=flat-square)](#)
 
 一键安装与管理 Snell v4 / v5 / v6，支持 ShadowTLS v3、多用户与 BBR，
 并提供启动即输出客户端配置的多架构 Docker 镜像。
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://stats.jinqians.com/chart/snell.svg?theme=dark&lang=zh">
-  <img alt="近 30 天每日运行次数" src="https://stats.jinqians.com/chart/snell.svg?lang=zh">
-</picture>
 
 [中文](README.md) ｜ [English](README.en.md) ｜ [作者网站](https://jinqians.com)
 
@@ -202,6 +193,7 @@ HK = snell, 1.2.3.4, 8443, psk = your_psk, version = 5, reuse = true, tfo = true
   - [Surge 配置文件](#surge-配置文件)
   - [赞助](#赞助)
   - [相关链接](#相关链接)
+  - [运行统计](#运行统计)
 
 ---
 
@@ -945,3 +937,12 @@ https://raw.githubusercontent.com/jinqians/snell.sh/refs/heads/main/surge.conf
 - PSM 项目：[jinqians/proxy-stack](https://github.com/jinqians/proxy-stack)
 - Docker Hub：[jinqians/snell-server](https://hub.docker.com/r/jinqians/snell-server)
 - 开源协议：[GPL-3.0](LICENSE)
+
+---
+
+## 运行统计
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://stats.jinqians.com/chart/snell.svg?theme=dark&lang=zh">
+  <img alt="近 30 天每日运行次数" src="https://stats.jinqians.com/chart/snell.svg?lang=zh">
+</picture>
