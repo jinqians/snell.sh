@@ -95,6 +95,9 @@ pkg_for_cmd() {
         ip|ss) if [ "$OS_FAMILY" = "rhel" ]; then echo "iproute"; else echo "iproute2"; fi ;;
         nft) echo "nftables" ;;
         fuser) echo "psmisc" ;;
+        gpg) if [ "$OS_FAMILY" = "rhel" ]; then echo "gnupg2"; else echo "gnupg"; fi ;;
+        sysctl) if [ "$OS_FAMILY" = "rhel" ]; then echo "procps-ng"; else echo "procps"; fi ;;
+        modprobe) echo "kmod" ;;
         *) echo "$1" ;;
     esac
 }
@@ -1107,6 +1110,35 @@ restart_and_verify_service() {
     return 1
 }
 
+# 写用户的 systemd 单元，ExecStart 指向该用户所选通道的二进制
+write_user_service_unit() {
+    local port="$1"
+    local user_conf="$2"
+    local version="$3"
+    local snell_binary
+    snell_binary=$(snell_binary_for_version "$version")
+
+    cat > "${SYSTEMD_DIR}/snell-${port}.service" << EOF
+[Unit]
+Description=Snell Proxy Service (Port ${port}, ${version})
+After=network.target
+
+[Service]
+Type=simple
+User=${SNELL_SERVICE_USER}
+Group=${SNELL_SERVICE_GROUP}
+LimitNOFILE=32768
+ExecStart=${snell_binary} -c ${user_conf}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=snell-server-${port}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 # 切换/回滚用的备份统一放在 ${SNELL_CONF_DIR}/backup 下。
 # 不能放进 users/ —— 多处循环是按 users/* 遍历的，备份文件会被当成真实用户。
 snell_backup_path() {
@@ -1780,35 +1812,6 @@ select_user_snell_version() {
     done
 
     echo -e "${GREEN}已选择 Snell ${SNELL_VERSION_CHOICE}${RESET}"
-}
-
-# 写用户的 systemd 单元，ExecStart 指向该用户所选通道的二进制
-write_user_service_unit() {
-    local port="$1"
-    local user_conf="$2"
-    local version="$3"
-    local snell_binary
-    snell_binary=$(snell_binary_for_version "$version")
-
-    cat > "${SYSTEMD_DIR}/snell-${port}.service" << EOF
-[Unit]
-Description=Snell Proxy Service (Port ${port}, ${version})
-After=network.target
-
-[Service]
-Type=simple
-User=${SNELL_SERVICE_USER}
-Group=${SNELL_SERVICE_GROUP}
-LimitNOFILE=32768
-ExecStart=${snell_binary} -c ${user_conf}
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=snell-server-${port}
-
-[Install]
-WantedBy=multi-user.target
-EOF
 }
 
 # 把某个用户的配置切换到目标通道：备好二进制 -> 迁移配置参数 -> 改 unit -> 重启，失败自动回滚

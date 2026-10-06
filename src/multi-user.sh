@@ -237,35 +237,6 @@ select_user_snell_version() {
     echo -e "${GREEN}已选择 Snell ${SNELL_VERSION_CHOICE}${RESET}"
 }
 
-# 写用户的 systemd 单元，ExecStart 指向该用户所选通道的二进制
-write_user_service_unit() {
-    local port="$1"
-    local user_conf="$2"
-    local version="$3"
-    local snell_binary
-    snell_binary=$(snell_binary_for_version "$version")
-
-    cat > "${SYSTEMD_DIR}/snell-${port}.service" << EOF
-[Unit]
-Description=Snell Proxy Service (Port ${port}, ${version})
-After=network.target
-
-[Service]
-Type=simple
-User=${SNELL_SERVICE_USER}
-Group=${SNELL_SERVICE_GROUP}
-LimitNOFILE=32768
-ExecStart=${snell_binary} -c ${user_conf}
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=snell-server-${port}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
 # 把某个用户的配置切换到目标通道：备好二进制 -> 迁移配置参数 -> 改 unit -> 重启，失败自动回滚
 switch_user_conf_version() {
     local conf_file="$1"

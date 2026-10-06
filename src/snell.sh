@@ -19,7 +19,7 @@ SNELL_LIB="${SNELL_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib}"  # @
 . "$SNELL_LIB/routing.sh"   # @bundle
 
 #当前版本号
-current_version="6.1"
+current_version="6.2"
 
 # 出口控制（netns + socket activation）默认参数
 EGRESS_FEATURE_ENABLED="false"
@@ -1924,7 +1924,6 @@ initial_check() {
     fi
     sync_existing_main_service_unit
     upgrade_management_script
-    check_and_show_status
 }
 
 # 运行初始检查
@@ -1952,36 +1951,327 @@ setup_multi_user() {
     sleep 1  # 给用户一点时间看到提示
 }
 
-# 两栏菜单的一行：_menu_row "1." "安装 Snell" 9 "7." "多用户管理"
-# $3 为左栏补空格数（标签固定，空格数已按中文 2 列宽度算好，左栏总宽 24）
-_menu_row() {
-    echo -e "${GREEN}  $1${RESET} $2$(printf '%*s' "$3" "")${GREEN}$4${RESET} $5"
+# ── 修改配置：端口 / PSK / DNS（主用户与多用户） ─────────────────────────────
+# 配置里某个键的值（取第一个 = 之后的全部，base64 PSK 里的 = 不会被截掉）
+conf_value() {   # <conf> <key>
+    grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" 2>/dev/null | head -n 1 \
+        | sed -e 's/^[^=]*=[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+conf_port() { conf_value "$1" listen | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p'; }
+
+# 把配置里某个键改成新值（没有这个键就加在末尾）；写回原文件，属主和权限不变
+conf_set() {   # <conf> <key> <value>
+    local tmp rc
+    tmp=$(mktemp) || return 1
+    awk -v k="$2" -v v="$3" '
+        BEGIN { done = 0 }
+        $0 ~ "^[[:space:]]*" k "[[:space:]]*=" && !done { print k " = " v; done = 1; next }
+        { print }
+        END { if (!done) print k " = " v }
+    ' "$1" > "$tmp" && cat "$tmp" > "$1"
+    rc=$?
+    rm -f "$tmp"
+    return $rc
+}
+
+# 改之前的样子：配置与相关 unit 各备一份（放在 /tmp 下的临时目录），失败时整体放回
+_edit_backup_dir=""
+edit_backup() {   # <文件>…
+    local f
+    _edit_backup_dir=$(mktemp -d /tmp/snell-edit.XXXXXX) || return 1
+    for f in "$@"; do
+        [ -e "$f" ] || continue
+        mkdir -p "${_edit_backup_dir}$(dirname "$f")"
+        cp -a "$f" "${_edit_backup_dir}${f}"
+    done
+}
+edit_restore() {
+    local f
+    case "$_edit_backup_dir" in /tmp/snell-edit.*) ;; *) return 0 ;; esac
+    while IFS= read -r f; do
+        cp -a "${_edit_backup_dir}${f}" "$f"
+    done < <(cd "$_edit_backup_dir" && find . -type f | sed 's|^\.||')
+    edit_forget_backup
+}
+edit_forget_backup() {
+    case "$_edit_backup_dir" in /tmp/snell-edit.*) rm -rf -- "${_edit_backup_dir:?}" ;; esac
+    _edit_backup_dir=""
+}
+
+# 端口给了另一个 Snell 配置用
+port_taken_by_snell() {   # <port> <除外的 conf>
+    local f
+    for f in "$SNELL_CONF_FILE" "${SNELL_CONF_DIR}"/users/*.conf; do
+        [ -f "$f" ] && [ "$f" != "$2" ] && [ "$(conf_port "$f")" = "$1" ] && return 0
+    done
+    return 1
+}
+
+edit_snell_port() {   # <conf> <service>
+    local conf="$1" service="$2" old new host version ns
+    old=$(conf_port "$conf")
+    host=$(conf_value "$conf" listen | sed 's/:[0-9]*$//')
+    while true; do
+        read -rp "新端口（1-65535，直接回车取消）: " new || return 0
+        [ -z "$new" ] && return 0
+        if ! [[ "$new" =~ ^[0-9]+$ ]] || [ "$new" -lt 1 ] || [ "$new" -gt 65535 ]; then
+            echo -e "${RED}端口要是 1 到 65535 之间的数字${RESET}"; continue
+        fi
+        [ "$new" = "$old" ] && { echo -e "${YELLOW}和现在的端口一样${RESET}"; continue; }
+        if port_taken_by_snell "$new" "$conf"; then
+            echo -e "${RED}端口 ${new} 已经给另一个 Snell 用户用了${RESET}"; continue
+        fi
+        if is_port_in_use "$new"; then
+            echo -e "${RED}端口 ${new} 正被别的程序占用：${RESET}"; show_port_occupier "$new"; continue
+        fi
+        break
+    done
+
+    local unit_dir="${SYSTEMD_DIR:?}"
+    local stls_old="${unit_dir}/shadowtls-snell-${old}.service"
+    local stls_new="${unit_dir}/shadowtls-snell-${new}.service"
+    local new_conf="$conf" new_service="snell"
+    version=$(get_conf_snell_version "$conf")
+    if [ "$service" != "snell" ]; then
+        new_conf="${SNELL_CONF_DIR:?}/users/snell-${new}.conf"; new_service="snell-${new}"
+    fi
+    local socket_mode=false
+    [ "$service" = "snell" ] && systemctl is-enabled --quiet snell.socket 2>/dev/null && socket_mode=true
+    edit_backup "$conf" "${unit_dir}/${service}.service" "$SYSTEMD_SOCKET_FILE" "$stls_old"
+
+    # 先停，改完一起起来
+    [ -f "$stls_old" ] && systemctl stop "shadowtls-snell-${old}" 2>/dev/null
+    if $socket_mode; then systemctl stop snell snell.socket 2>/dev/null; else systemctl stop "$service" 2>/dev/null; fi
+
+    local ok=true
+    conf_set "$conf" listen "${host}:${new}" || ok=false
+    if $ok && [ "$service" != "snell" ]; then
+        # 多用户：配置与 unit 都按端口命名
+        systemctl disable "$service" 2>/dev/null
+        if mv "$conf" "$new_conf"; then
+            rm -f -- "${unit_dir}/snell-${old}.service"
+            write_user_service_unit "$new" "$new_conf" "$version"
+            [ -d "${unit_dir}/snell-${old}.service.d" ] && mv "${unit_dir}/snell-${old}.service.d" "${unit_dir}/snell-${new}.service.d"
+            systemctl daemon-reload
+            systemctl enable "$new_service" 2>/dev/null
+        else
+            ok=false
+        fi
+    fi
+    if $ok && [ -f "$stls_old" ]; then
+        # 前面的 ShadowTLS：后端改成新端口，unit 跟着端口改名
+        systemctl disable "shadowtls-snell-${old}" 2>/dev/null
+        if sed "s|--server 127.0.0.1:${old} |--server 127.0.0.1:${new} |" "$stls_old" > "$stls_new"; then
+            rm -f -- "$stls_old"
+            systemctl daemon-reload
+            systemctl enable "shadowtls-snell-${new}" 2>/dev/null
+        else
+            ok=false
+        fi
+    fi
+
+    if $ok; then
+        if $socket_mode; then
+            # 出口控制（socket 激活）：按新端口重写 socket 单元再拉起
+            if [ -f "${NETNS_SETUP_SCRIPT}" ]; then
+                ns=$(sed -n 's/^ip netns add \([A-Za-z0-9_.-]\{1,\}\).*/\1/p' "${NETNS_SETUP_SCRIPT}" | head -n 1)
+                [ -n "$ns" ] && EGRESS_NS="$ns"
+            fi
+            write_snell_socket_service_units "$new"
+            systemctl daemon-reload
+            start_egress_runtime "$new" >/dev/null || ok=false
+        else
+            restart_and_verify_service "$new_service" || ok=false
+        fi
+    fi
+    if $ok && [ -f "$stls_new" ]; then
+        restart_and_verify_service "shadowtls-snell-${new}" || ok=false
+    fi
+
+    if ! $ok; then
+        echo -e "${RED}改端口没成功，正在还原…${RESET}"
+        systemctl stop "$new_service" "shadowtls-snell-${new}" 2>/dev/null
+        systemctl disable "$new_service" "shadowtls-snell-${new}" 2>/dev/null
+        if [ "$service" != "snell" ]; then
+            rm -f -- "${unit_dir}/snell-${new}.service" "${SNELL_CONF_DIR:?}/users/snell-${new}.conf"
+            [ -d "${unit_dir}/snell-${new}.service.d" ] && mv "${unit_dir}/snell-${new}.service.d" "${unit_dir}/snell-${old}.service.d"
+        fi
+        [ -f "$stls_new" ] && rm -f -- "$stls_new"
+        edit_restore
+        systemctl daemon-reload
+        systemctl enable "$service" 2>/dev/null
+        [ -f "$stls_old" ] && systemctl enable "shadowtls-snell-${old}" 2>/dev/null
+        if $socket_mode; then start_egress_runtime "$old" >/dev/null; else restart_and_verify_service "$service" >/dev/null; fi
+        [ -f "$stls_old" ] && systemctl restart "shadowtls-snell-${old}" 2>/dev/null
+        echo -e "${YELLOW}已还原为端口 ${old}${RESET}"
+        return 1
+    fi
+    edit_forget_backup
+
+    # 防火墙：只在 Snell 自己对外监听时开关（前面有 ShadowTLS 时它只听 127.0.0.1）
+    if [ "$host" != "127.0.0.1" ]; then
+        close_port "$old" >/dev/null 2>&1
+        open_port "$new"
+    fi
+    echo -e "${GREEN}✓ 端口已改为 ${new}${RESET}"
+    [ -f "$stls_new" ] && echo -e "${YELLOW}前面有 ShadowTLS：客户端仍连 ShadowTLS 的端口，不用改${RESET}"
+    EDIT_CONF="$new_conf"; EDIT_SERVICE="$new_service"
+}
+
+edit_snell_psk() {   # <conf> <service>
+    local conf="$1" service="$2" psk
+    while true; do
+        read -rp "新 PSK（直接回车随机生成）: " psk || return 0
+        [ -z "$psk" ] && psk=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
+        [[ "$psk" =~ ^[A-Za-z0-9._~+/=-]{8,128}$ ]] && break
+        echo -e "${RED}PSK 要 8 到 128 个字符，只能是字母、数字和 . _ ~ + / = -${RESET}"
+    done
+    edit_backup "$conf"
+    if conf_set "$conf" psk "$psk" && restart_and_verify_service "$service"; then
+        edit_forget_backup
+        echo -e "${GREEN}✓ PSK 已改为 ${psk}${RESET}"
+        echo -e "${YELLOW}客户端要改用新的 PSK${RESET}"
+    else
+        edit_restore; restart_and_verify_service "$service" >/dev/null
+        echo -e "${RED}改 PSK 没成功，已还原${RESET}"; return 1
+    fi
+}
+
+edit_snell_dns() {   # <conf> <service>
+    local conf="$1" service="$2"
+    get_dns
+    edit_backup "$conf"
+    if conf_set "$conf" dns "$DNS" && restart_and_verify_service "$service"; then
+        edit_forget_backup
+        echo -e "${GREEN}✓ DNS 已改为 ${DNS}${RESET}"
+    else
+        edit_restore; restart_and_verify_service "$service" >/dev/null
+        echo -e "${RED}改 DNS 没成功，已还原${RESET}"; return 1
+    fi
+}
+
+# 菜单 4：选一个用户（只有主用户时直接进），再改它的端口、PSK 或 DNS
+edit_snell_config() {
+    local confs=() f i choice
+    [ -f "$SNELL_CONF_FILE" ] && confs+=("$SNELL_CONF_FILE")
+    for f in "${SNELL_CONF_DIR}"/users/snell-*.conf; do
+        [ -f "$f" ] && [ "$f" != "$SNELL_CONF_FILE" ] && confs+=("$f")
+    done
+    if [ ${#confs[@]} -eq 0 ]; then
+        echo -e "${YELLOW}还没有安装 Snell${RESET}"; return 0
+    fi
+    EDIT_CONF="${confs[0]}"
+    if [ ${#confs[@]} -gt 1 ]; then
+        echo -e "${CYAN}改哪一个：${RESET}"
+        for i in "${!confs[@]}"; do
+            f="${confs[$i]}"
+            printf "  ${GREEN}%2d${RESET}  %s 端口 %-6s %s\n" $((i + 1)) "$([ "$f" = "$SNELL_CONF_FILE" ] && echo "主用户" || echo "用户  ")" "$(conf_port "$f")" "$(get_conf_snell_version "$f")"
+        done
+        echo -e "  ${GREEN} 0${RESET}  返回"
+        read -rp "请选择 [0-${#confs[@]}]: " choice || return 0
+        [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#confs[@]} ] || return 0
+        EDIT_CONF="${confs[$((choice - 1))]}"
+    fi
+    EDIT_SERVICE=$(snell_service_for_port "$(conf_port "$EDIT_CONF")")
+    while true; do
+        echo
+        echo -e "${CYAN}  ${EDIT_SERVICE}：端口 $(conf_port "$EDIT_CONF")   PSK $(conf_value "$EDIT_CONF" psk)   DNS $(conf_value "$EDIT_CONF" dns)   $(get_conf_snell_version "$EDIT_CONF")${RESET}"
+        echo -e "  ${GREEN}1${RESET}  端口    ${GREEN}2${RESET}  PSK    ${GREEN}3${RESET}  DNS    ${GREEN}0${RESET}  返回"
+        read -rp "改哪一项 [0-3]: " choice || return 0
+        case "$choice" in
+            1) edit_snell_port "$EDIT_CONF" "$EDIT_SERVICE" ;;
+            2) edit_snell_psk "$EDIT_CONF" "$EDIT_SERVICE" ;;
+            3) edit_snell_dns "$EDIT_CONF" "$EDIT_SERVICE" ;;
+            0|"") break ;;
+            *) echo -e "${RED}无效的选择${RESET}" ;;
+        esac
+    done
+    echo -e "${CYAN}新的客户端配置见「3. 查看配置」${RESET}"
+}
+
+# 菜单里中文占两格：按显示宽度补齐（与 locale 无关：非 ASCII 字符按 3 字节、2 格算）
+_dw() {
+    local a b
+    a=$(printf '%s' "$1" | LC_ALL=C tr -d '\200-\377' | LC_ALL=C wc -c)
+    b=$(printf '%s' "$1" | LC_ALL=C wc -c)
+    echo $(( a + 2 * (b - a) / 3 ))
+}
+_pad() {   # <文字> <宽度>：文字后补空格到这个宽度
+    local w; w=$(_dw "$1")
+    printf '%s%*s' "$1" $(( $2 > w ? $2 - w : 0 )) ''
+}
+# 一行菜单：<组名> <编号> <名称> [<编号> <名称>]
+_menu_line() {
+    local line
+    line="  ${CYAN}$(_pad "$1" 6)${RESET}"
+    line="${line}${GREEN}$(printf '%3s' "$2")${RESET}  $(_pad "$3" 22)"
+    [ -n "${4:-}" ] && line="${line}${GREEN}$(printf '%3s' "$4")${RESET}  $5"
+    echo -e "$line"
+}
+_dot() { if [ "$1" = "on" ]; then printf '%b' "${GREEN}●${RESET}"; else printf '%b' "${YELLOW}○${RESET}"; fi; }
+
+# 菜单顶部的状态：两行，只看有没有在跑、跑了几个
+menu_status() {
+    local port conf units=() unit running=0 total=0 mem=0 pid rss ch chs="" line
+    if command -v snell-server >/dev/null 2>&1 || ls "${INSTALL_DIR}"/snell-server-v[456] >/dev/null 2>&1; then
+        # 主用户的配置也在 users/ 下（snell-main.conf），每个配置只数一次
+        for conf in "${SNELL_CONF_DIR}"/users/*.conf; do
+            [ -f "$conf" ] || continue
+            port=$(sed -n 's/^[[:space:]]*listen[[:space:]]*=.*:\([0-9][0-9]*\).*/\1/p' "$conf" | head -n 1)
+            [ -n "$port" ] || continue
+            unit=$(snell_service_for_port "$port")
+            total=$((total + 1))
+            if systemctl is-active --quiet "$unit" || { [ "$unit" = "snell" ] && systemctl is-active --quiet snell.socket; }; then
+                running=$((running + 1))
+                pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
+                rss=$( [ -n "$pid" ] && [ "$pid" != "0" ] && ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+                mem=$((mem + ${rss:-0}))
+            fi
+        done
+        for ch in $(list_installed_snell_versions); do
+            chs="${chs}${ch}×$(list_services_using_version "$ch" | grep -c .) "
+        done
+        if [ "$total" -gt 0 ] && [ "$running" -eq "$total" ]; then line="$(_dot on) 运行中 ${running}/${total}"
+        elif [ "$total" -gt 0 ]; then line="$(_dot off) 运行中 ${running}/${total}"
+        else line="$(_dot off) 已安装，未配置"; fi
+        echo -e "  $(_pad Snell 11)${line}   ${chs}  内存 $(awk -v k="$mem" 'BEGIN { printf "%.1f", k / 1024 }') MB"
+    else
+        echo -e "  $(_pad Snell 11)$(_dot off) 未安装"
+    fi
+    local stls bbr route n=0 r=0 f
+    if [ -x /usr/local/bin/shadow-tls ]; then
+        for f in "${SYSTEMD_DIR}"/shadowtls-*.service; do
+            [ -f "$f" ] || continue
+            n=$((n + 1)); systemctl is-active --quiet "$(basename "$f")" && r=$((r + 1))
+        done
+        if [ "$n" -gt 0 ] && [ "$r" -eq "$n" ]; then stls="$(_dot on) 运行中 ${r}/${n}"; else stls="$(_dot off) 运行中 ${r}/${n}"; fi
+    else
+        stls="$(_dot off) 未安装"
+    fi
+    if [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ]; then bbr="$(_dot on) 已启用"; else bbr="$(_dot off) 未启用"; fi
+    if systemctl is-active --quiet snell-router 2>/dev/null; then route="$(_dot on) 已启用"
+    elif router_installed; then route="$(_dot off) 已停用"
+    else route="$(_dot off) 未启用"; fi
+    echo -e "  $(_pad ShadowTLS 11)${stls}    BBR ${bbr}    分流 ${route}"
 }
 
 # 主菜单
 show_menu() {
+    local rule="  ──────────────────────────────────────────────────────────"
     clear
-    echo -e "${CYAN}============================================${RESET}"
-    echo -e "${CYAN}    Snell 管理脚本 v${current_version} (v4/v5/v6 可共存)${RESET}"
-    echo -e "${CYAN}============================================${RESET}"
-    echo -e "${GREEN}作者: jinqian${RESET}"
-    echo -e "${GREEN}网站：https://jinqians.com${RESET}"
-    echo -e "${CYAN}============================================${RESET}"
-    
-
-    # 显示服务状态
-    check_and_show_status
-
-    echo -e "${CYAN}--------------------------------------------${RESET}"
-    _menu_row "1." "安装 Snell" 9 "7." "多用户管理"
-    _menu_row "2." "卸载 Snell" 9 "8." "版本管理（更新 / 追加通道 / 切换通道）"
-    _menu_row "3." "查看配置" 11 "9." "更新脚本"
-    _menu_row "4." "重启服务" 11 "10." "查看服务状态"
-    _menu_row "5." "ShadowTLS 管理" 5 "11." "Snell v5/v6 出口控制设置"
-    _menu_row "6." "BBR 管理" 11 "12." "规则分流（sing-box：广告 / 大陆 / AI / 流媒体… 走不同出口）"
-    echo -e "${GREEN}  0.${RESET} 退出脚本"
-    echo -e "${CYAN}--------------------------------------------${RESET}"
-    if ! read -rp "请输入选项 [0-12]: " num; then
+    echo -e "${CYAN}  Snell 管理脚本 v${current_version}${RESET}$(printf '%*s' 27 '')${CYAN}jinqians.com${RESET}"
+    echo -e "${CYAN}${rule}${RESET}"
+    menu_status
+    echo -e "${CYAN}${rule}${RESET}"
+    _menu_line "安装" 1 "安装 Snell" 2 "卸载 Snell"
+    _menu_line "配置" 3 "查看配置" 4 "修改端口 / PSK / DNS"
+    _menu_line "" 5 "多用户管理" 6 "版本管理（v4 / v5 / v6）"
+    _menu_line "服务" 7 "重启服务" 8 "服务状态"
+    _menu_line "增强" 9 "ShadowTLS" 10 "BBR"
+    _menu_line "" 11 "规则分流（sing-box）" 12 "出口控制（v5 / v6）"
+    _menu_line "脚本" 13 "更新脚本" 0 "退出"
+    echo -e "${CYAN}${rule}${RESET}"
+    if ! read -rp "  请选择 [0-13]: " num; then
         echo
         echo -e "${YELLOW}未读取到输入，已退出 Snell 菜单。${RESET}"
         exit 0
@@ -2014,50 +2304,25 @@ setup_shadowtls() {
 while true; do
     show_menu
     case "$num" in
-        1)
-            install_snell
-            ;;
-        2)
-            uninstall_snell
-            ;;
-        3)
-            view_snell_config
-            ;;
-        4)
-            restart_snell
-            ;;
-        5)
-            setup_shadowtls
-            ;;
-        6)
-            setup_bbr
-            ;;
-        7)
-            setup_multi_user
-            ;;
-        8)
-            check_snell_update
-            ;;
-        9)
-            update_script
-            ;;
-        10)
-            check_and_show_status
-            read -p "按任意键继续..." || exit 0
-            ;;
-        11)
-            configure_v5_egress_control
-            read -p "按任意键继续..." || exit 0
-            ;;
-        12)
-            router_menu
-            ;;
+        1) install_snell ;;
+        2) uninstall_snell ;;
+        3) view_snell_config ;;
+        4) edit_snell_config ;;
+        5) setup_multi_user ;;
+        6) check_snell_update ;;
+        7) restart_snell ;;
+        8) check_and_show_status ;;
+        9) setup_shadowtls ;;
+        10) setup_bbr ;;
+        11) router_menu ;;
+        12) configure_v5_egress_control ;;
+        13) update_script ;;
         0)
             echo -e "${GREEN}感谢使用，再见！${RESET}"
             exit 0
             ;;
         *)
-            echo -e "${RED}请输入正确的选项 [0-12]${RESET}"
+            echo -e "${RED}请输入正确的选项 [0-13]${RESET}"
             ;;
     esac
     echo -e "\n${CYAN}按任意键返回主菜单...${RESET}"

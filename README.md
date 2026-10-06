@@ -34,7 +34,7 @@ sh -c "$(curl -fsSL https://install.jinqians.com)"
 | Alpine（Docker 方案，3.19 起用这个） | `sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"` |
 | 多功能菜单（Snell / SS-2022 / ShadowTLS） | `bash <(curl -fsSL https://menu.jinqians.com)` |
 
-装好后输入 `snell` 进入管理菜单：查看配置、多用户、ShadowTLS、BBR、版本管理（v4 / v5 / v6 同机共存）、规则分流。
+装好后输入 `snell` 进入管理菜单：查看配置、修改端口 / PSK / DNS、多用户、版本管理（v4 / v5 / v6 同机共存）、ShadowTLS、BBR、规则分流。
 → [脚本安装与管理](https://github.com/jinqians/snell.sh/wiki/%E8%84%9A%E6%9C%AC%E5%AE%89%E8%A3%85%E4%B8%8E%E7%AE%A1%E7%90%86)
 
 ## Docker
@@ -86,7 +86,7 @@ HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 5, reuse = true, tfo = true
 
 ## ShadowTLS（可选）
 
-给 Snell 套一层 TLS 伪装，对外只暴露 ShadowTLS 端口。脚本安装：菜单选「5. ShadowTLS 管理」；
+给 Snell 套一层 TLS 伪装，对外只暴露 ShadowTLS 端口。脚本安装：菜单选「9. ShadowTLS」；
 Docker：加 `SHADOWTLS_ENABLE=1` 等环境变量 → [Snell + ShadowTLS v3](https://github.com/jinqians/snell.sh/wiki/Docker-%E9%83%A8%E7%BD%B2#2-snell--shadowtls-v3)
 
 ## 文档

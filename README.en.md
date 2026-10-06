@@ -35,7 +35,7 @@ Or run the one for your system:
 | Alpine (in Docker; use this from 3.19 on) | `sh -c "$(curl -fsSL https://snell-docker.jinqians.com)"` |
 | All-in-one menu (Snell / SS-2022 / ShadowTLS) | `bash <(curl -fsSL https://menu.jinqians.com)` |
 
-Afterwards, `snell` opens the menu: the config, more users, ShadowTLS, BBR, versions (v4 / v5 / v6 side by side), rule-based routing.
+Afterwards, `snell` opens the menu: the config, changing the port / PSK / DNS, more users, versions (v4 / v5 / v6 side by side), ShadowTLS, BBR, rule-based routing.
 → [Script install and management](https://github.com/jinqians/snell.sh/wiki/Script-Install-and-Management)
 
 ## Docker
@@ -87,7 +87,7 @@ HK = snell, 1.2.3.4, 6160, psk = your_psk, version = 5, reuse = true, tfo = true
 
 ## ShadowTLS (optional)
 
-A TLS disguise around Snell; only the ShadowTLS port is exposed. Script install: menu → "5. ShadowTLS";
+A TLS disguise around Snell; only the ShadowTLS port is exposed. Script install: menu → "9. ShadowTLS";
 Docker: add `SHADOWTLS_ENABLE=1` and friends → [Snell + ShadowTLS v3](https://github.com/jinqians/snell.sh/wiki/Docker#b-snell--shadowtls-v3)
 
 ## Documentation

@@ -85,6 +85,9 @@ pkg_for_cmd() {
         ip|ss) if [ "$OS_FAMILY" = "rhel" ]; then echo "iproute"; else echo "iproute2"; fi ;;
         nft) echo "nftables" ;;
         fuser) echo "psmisc" ;;
+        gpg) if [ "$OS_FAMILY" = "rhel" ]; then echo "gnupg2"; else echo "gnupg"; fi ;;
+        sysctl) if [ "$OS_FAMILY" = "rhel" ]; then echo "procps-ng"; else echo "procps"; fi ;;
+        modprobe) echo "kmod" ;;
         *) echo "$1" ;;
     esac
 }
